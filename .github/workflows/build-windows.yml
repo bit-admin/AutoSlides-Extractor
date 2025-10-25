@@ -1,0 +1,248 @@
+name: Build Windows Release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version: '6.8.3'
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2022_64'
+        cache: true
+        cache-key-prefix: 'install-qt-action'
+
+    - name: Cache vcpkg
+      uses: actions/cache@v4
+      with:
+        path: |
+          C:/vcpkg/installed
+          C:/vcpkg/packages
+          C:/vcpkg/buildtrees
+          C:/Users/runneradmin/AppData/Local/vcpkg/archives
+          C:/vcpkg-cache
+          build/vcpkg_installed
+        key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-${{ hashFiles('**/CMakeLists.txt') }}-${{ runner.os }}-x64-windows
+        restore-keys: |
+          ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-${{ hashFiles('**/CMakeLists.txt') }}-
+          ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-
+          ${{ runner.os }}-vcpkg-
+
+    - name: Setup vcpkg
+      run: |
+        if (-not (Test-Path "C:/vcpkg")) {
+          Write-Host "Cloning vcpkg..."
+          git clone https://github.com/Microsoft/vcpkg.git C:/vcpkg
+        } else {
+          Write-Host "vcpkg directory exists, updating..."
+          cd C:/vcpkg
+          git pull
+        }
+        cd C:/vcpkg
+        Write-Host "Bootstrapping vcpkg..."
+        ./bootstrap-vcpkg.bat
+        Write-Host "vcpkg version:"
+        ./vcpkg version
+
+    - name: Setup vcpkg integration
+      run: |
+        Write-Host "Setting up vcpkg integration..."
+        # Enable file-based binary caching for reliability
+        $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-cache,readwrite"
+        Write-Host "Using file-based vcpkg binary caching at C:/vcpkg-cache"
+        Write-Host "Integrating vcpkg with Visual Studio..."
+        C:/vcpkg/vcpkg integrate install
+        Write-Host "Note: Dependencies will be installed automatically by CMake using vcpkg.json manifest"
+
+    - name: Cache CMake build
+      uses: actions/cache@v4
+      with:
+        path: |
+          build
+        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}-${{ hashFiles('**/vcpkg.json') }}
+        restore-keys: |
+          ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}-
+          ${{ runner.os }}-cmake-
+
+    - name: Debug vcpkg installation
+      run: |
+        Write-Host "Checking vcpkg installation..."
+        C:/vcpkg/vcpkg list
+        Write-Host "Checking OpenCV installation..."
+        if (Test-Path "C:/vcpkg/installed/x64-windows/include/opencv2") {
+          Write-Host "✓ OpenCV headers found"
+        } else {
+          Write-Host "✗ OpenCV headers not found"
+        }
+        if (Test-Path "C:/vcpkg/installed/x64-windows/lib/opencv_core*.lib") {
+          Write-Host "✓ OpenCV libraries found"
+        } else {
+          Write-Host "✗ OpenCV libraries not found"
+        }
+
+    - name: Configure CMake
+      run: |
+        if (-not (Test-Path "build")) {
+          mkdir build
+        }
+        cd build
+        # Enable file-based binary caching for reliability
+        $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-cache,readwrite"
+        Write-Host "Using file-based vcpkg binary caching at C:/vcpkg-cache"
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
+
+    - name: Build
+      run: |
+        cd build
+        cmake --build . --config Release --parallel
+
+    - name: Create portable package
+      run: |
+        cd build
+        # Create or clean package directory
+        if (Test-Path "package") {
+          Remove-Item "package" -Recurse -Force
+        }
+        mkdir package
+        cp Release/AutoSlidesExtractor.exe package/
+
+        # Deploy Qt dependencies
+        windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw package/AutoSlidesExtractor.exe
+
+        # Copy vcpkg dependencies - use CMake integrated path
+        $vcpkgRoot = "D:/a/AutoSlides-Extractor/AutoSlides-Extractor/build/vcpkg_installed/x64-windows"
+        Write-Host "Copying dependencies from: $vcpkgRoot/bin"
+
+        # Debug vcpkg installation paths
+        Write-Host "Debugging vcpkg paths:"
+        Write-Host "  C:/vcpkg exists: $(Test-Path 'C:/vcpkg')"
+        Write-Host "  C:/vcpkg/installed exists: $(Test-Path 'C:/vcpkg/installed')"
+        Write-Host "  $vcpkgRoot exists: $(Test-Path $vcpkgRoot)"
+        Write-Host "  $vcpkgRoot/bin exists: $(Test-Path '$vcpkgRoot/bin')"
+
+        # Try alternative paths (primary path should be correct now)
+        $alternativePaths = @(
+          "$vcpkgRoot/bin",
+          "D:/a/AutoSlides-Extractor/AutoSlides-Extractor/build/vcpkg_installed/x64-windows/bin",
+          "C:/vcpkg/installed/x64-windows/bin"
+        )
+
+        $actualVcpkgBin = $null
+        foreach ($path in $alternativePaths) {
+          Write-Host "  Checking path: $path - $(Test-Path $path)"
+          if (Test-Path $path) {
+            $dllCount = (Get-ChildItem "$path/*.dll" -ErrorAction SilentlyContinue).Count
+            Write-Host "    Found $dllCount DLL files"
+            if ($dllCount -gt 0 -and $null -eq $actualVcpkgBin) {
+              $actualVcpkgBin = $path
+              Write-Host "    ✓ Using this path for dependencies"
+            }
+          }
+        }
+
+        if ($actualVcpkgBin) {
+          $vcpkgBinPath = $actualVcpkgBin
+          Write-Host "Using vcpkg bin path: $vcpkgBinPath"
+
+          # List available DLLs for debugging
+          Write-Host "Available DLLs in vcpkg bin directory:"
+          Get-ChildItem "$vcpkgBinPath/*.dll" | ForEach-Object { Write-Host "  $($_.Name)" }
+        } else {
+          Write-Host "  ✗ No vcpkg bin directory with DLLs found!"
+          $vcpkgBinPath = "$vcpkgRoot/bin"  # fallback to original path
+        }
+
+        # Copy OpenCV DLLs with error reporting
+        Write-Host "Copying OpenCV DLLs..."
+        $opencvDlls = @("opencv_core4*.dll", "opencv_imgproc4*.dll", "opencv_imgcodecs4*.dll")
+        foreach ($dll in $opencvDlls) {
+          $files = Get-ChildItem "$vcpkgBinPath/$dll" -ErrorAction SilentlyContinue
+          if ($files) {
+            foreach ($file in $files) {
+              Copy-Item $file.FullName package/
+              Write-Host "  ✓ Copied $($file.Name)"
+            }
+          } else {
+            Write-Host "  ✗ No files found matching $dll"
+          }
+        }
+
+        # Copy FFmpeg DLLs with error reporting
+        Write-Host "Copying FFmpeg DLLs..."
+        $ffmpegDlls = @("avcodec*.dll", "avformat*.dll", "avutil*.dll", "swscale*.dll")
+        foreach ($dll in $ffmpegDlls) {
+          $files = Get-ChildItem "$vcpkgBinPath/$dll" -ErrorAction SilentlyContinue
+          if ($files) {
+            foreach ($file in $files) {
+              Copy-Item $file.FullName package/
+              Write-Host "  ✓ Copied $($file.Name)"
+            }
+          } else {
+            Write-Host "  ✗ No files found matching $dll"
+          }
+        }
+
+        # Copy all other required DLLs (dependencies of OpenCV/FFmpeg)
+        Write-Host "Copying other required DLLs..."
+        $otherDlls = Get-ChildItem "$vcpkgBinPath/*.dll" -ErrorAction SilentlyContinue | Where-Object {
+          $_.Name -notmatch "opencv_" -and $_.Name -notmatch "^av" -and $_.Name -notmatch "swscale"
+        }
+        foreach ($dll in $otherDlls) {
+          Copy-Item $dll.FullName package/
+          Write-Host "  ✓ Copied $($dll.Name)"
+        }
+
+        # Create version info
+        echo "AutoSlides Extractor - Windows Release" > package/README.txt
+        echo "Version: $(Get-Date -Format 'yyyy.MM.dd')" >> package/README.txt
+        echo "Built on: $(Get-Date)" >> package/README.txt
+        echo "" >> package/README.txt
+        echo "Usage:" >> package/README.txt
+        echo "1. Extract all files to a folder" >> package/README.txt
+        echo "2. Run AutoSlidesExtractor.exe" >> package/README.txt
+        echo "3. Select video files to extract slides from" >> package/README.txt
+
+        # Verify package contents
+        Write-Host "Final package contents:"
+        Get-ChildItem package/ -Recurse | ForEach-Object {
+          $size = if ($_.PSIsContainer) { "DIR" } else { "$([math]::Round($_.Length/1MB, 2)) MB" }
+          Write-Host "  $($_.Name) - $size"
+        }
+
+        $totalSize = (Get-ChildItem package/ -Recurse -File | Measure-Object -Property Length -Sum).Sum
+        Write-Host "Total package size: $([math]::Round($totalSize/1MB, 2)) MB"
+
+    - name: Create ZIP archive
+      run: |
+        cd build
+        $version = Get-Date -Format "yyyy.MM.dd"
+        $zipPath = "AutoSlidesExtractor-Windows-$version.zip"
+        # Remove existing zip file if it exists
+        if (Test-Path $zipPath) {
+          Remove-Item $zipPath -Force
+        }
+        Compress-Archive -Path package/* -DestinationPath $zipPath
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AutoSlidesExtractor-Windows
+        path: build/AutoSlidesExtractor-Windows-*.zip
+        retention-days: 30
+
