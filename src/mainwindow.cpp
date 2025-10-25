@@ -33,7 +33,7 @@ MainWindow::MainWindow(QWidget *parent)
     updateControlButtons();
     updateQueueTable();
 
-    setWindowTitle("AutoSlides Extractor v1.0");
+    setWindowTitle("AutoSlides Extractor v1.0.0");
     resize(480, 600);  // More compact layout without progress bars
 }
 

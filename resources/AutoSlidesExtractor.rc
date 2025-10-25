@@ -1,18 +1,15 @@
-// Windows Resource File for AutoSlides Extractor
-// This file defines the application icon and version information
-
 #include <windows.h>
 
-// Application icon (ID 1 is the default icon resource ID)
-1 ICON "icon.ico"
+// Application icon
+IDI_ICON1 ICON "icon.ico"
 
 // Version information
-1 VERSIONINFO
+VS_VERSION_INFO VERSIONINFO
 FILEVERSION 1,0,0,0
 PRODUCTVERSION 1,0,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
-FILEOS VOS_NT_WINDOWS32
+FILEOS VOS__WINDOWS32
 FILETYPE VFT_APP
 FILESUBTYPE VFT2_UNKNOWN
 BEGIN
@@ -22,12 +19,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "AutoSlides Project"
             VALUE "FileDescription", "AutoSlides Extractor - Extract slides from video presentations"
-            VALUE "FileVersion", "1.0.0.0"
+            VALUE "FileVersion", "1.0.0"
             VALUE "InternalName", "AutoSlidesExtractor"
             VALUE "LegalCopyright", "Copyright © 2025 AutoSlides Project. All rights reserved."
             VALUE "OriginalFilename", "AutoSlidesExtractor.exe"
             VALUE "ProductName", "AutoSlides Extractor"
-            VALUE "ProductVersion", "1.0.0.0"
+            VALUE "ProductVersion", "1.0.0"
         END
     END
     BLOCK "VarFileInfo"
