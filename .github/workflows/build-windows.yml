@@ -80,21 +80,6 @@ jobs:
           ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}-
           ${{ runner.os }}-cmake-
 
-    - name: Debug vcpkg installation
-      run: |
-        Write-Host "Checking vcpkg installation..."
-        C:/vcpkg/vcpkg list
-        Write-Host "Checking OpenCV installation..."
-        if (Test-Path "C:/vcpkg/installed/x64-windows/include/opencv2") {
-          Write-Host "✓ OpenCV headers found"
-        } else {
-          Write-Host "✗ OpenCV headers not found"
-        }
-        if (Test-Path "C:/vcpkg/installed/x64-windows/lib/opencv_core*.lib") {
-          Write-Host "✓ OpenCV libraries found"
-        } else {
-          Write-Host "✗ OpenCV libraries not found"
-        }
 
     - name: Configure CMake
       run: |
@@ -239,10 +224,71 @@ jobs:
         }
         Compress-Archive -Path package/* -DestinationPath $zipPath
 
-    - name: Upload artifact
+    - name: Install NSIS
+      run: |
+        Write-Host "Installing NSIS..."
+        choco install nsis -y
+        Write-Host "NSIS installation completed"
+
+    - name: Create NSIS Installer
+      continue-on-error: true
+      run: |
+        cd build
+        Write-Host "Creating NSIS installer..."
+
+        # Create installer directory structure
+        if (Test-Path "installer") {
+          Remove-Item "installer" -Recurse -Force
+        }
+        mkdir installer
+
+        # Copy NSIS script and resources
+        Copy-Item "../installer/AutoSlidesExtractor.nsi" "installer/"
+        Copy-Item "../installer/license.txt" "installer/"
+        Copy-Item "../resources/icon.ico" "installer/"
+
+        # Copy application files
+        Copy-Item "package" "installer/files" -Recurse
+
+        # Build installer
+        $version = Get-Date -Format "yyyy.MM.dd"
+        $installerName = "AutoSlidesExtractor-Setup-$version.exe"
+
+        Write-Host "Building installer: $installerName"
+
+        try {
+          & "C:\Program Files (x86)\NSIS\makensis.exe" `
+            /DVERSION=$version `
+            /DOUTFILE="../$installerName" `
+            installer/AutoSlidesExtractor.nsi
+
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✓ Installer created successfully: $installerName"
+            if (Test-Path $installerName) {
+              $installerSize = (Get-Item $installerName).Length
+              Write-Host "Installer size: $([math]::Round($installerSize/1MB, 2)) MB"
+            } else {
+              Write-Host "⚠ Installer file not found at expected location"
+            }
+          } else {
+            Write-Host "✗ NSIS compilation failed with exit code: $LASTEXITCODE"
+          }
+        } catch {
+          Write-Host "✗ Exception during NSIS compilation: $($_.Exception.Message)"
+        }
+
+    - name: Upload ZIP artifact
       uses: actions/upload-artifact@v4
       with:
-        name: AutoSlidesExtractor-Windows
+        name: AutoSlidesExtractor-Windows-Portable
         path: build/AutoSlidesExtractor-Windows-*.zip
+        retention-days: 30
+
+    - name: Upload installer artifact
+      uses: actions/upload-artifact@v4
+      if: hashFiles('build/AutoSlidesExtractor-Setup-*.exe') != ''
+      with:
+        name: AutoSlidesExtractor-Windows-Installer
+        path: build/AutoSlidesExtractor-Setup-*.exe
         retention-days: 30
 

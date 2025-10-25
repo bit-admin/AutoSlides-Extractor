@@ -23,6 +23,11 @@
 cmake_minimum_required(VERSION 3.16)
 project(AutoSlidesExtractor VERSION 1.0.0 LANGUAGES CXX)
 
+# Enable resource compiler on Windows
+if(WIN32)
+    enable_language(RC)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -330,6 +335,11 @@ set(SOURCES
     src/performancemonitor.cpp
 )
 
+# Add Windows resource file for icon
+if(WIN32)
+    list(APPEND SOURCES resources/AutoSlidesExtractor.rc)
+endif()
+
 # Header files
 set(HEADERS
     src/mainwindow.h
@@ -431,19 +441,17 @@ set_target_properties(AutoSlidesExtractor PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
-# Platform-specific icon configuration
+# Copy icon file to app bundle on macOS
 if(APPLE)
-    # macOS app bundle icon
     set(MACOSX_BUNDLE_ICON_FILE "AutoSlidesExtractor.icns")
     set(APP_ICON_MACOSX "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.icns")
     set_source_files_properties(${APP_ICON_MACOSX} PROPERTIES
         MACOSX_PACKAGE_LOCATION "Resources")
     target_sources(AutoSlidesExtractor PRIVATE ${APP_ICON_MACOSX})
-elseif(WIN32)
-    # Windows executable icon
-    set(APP_ICON_RESOURCE_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/resources/app_icon.rc")
-    target_sources(AutoSlidesExtractor PRIVATE ${APP_ICON_RESOURCE_WINDOWS})
 endif()
+
+# Windows icon is handled by the resource file (AutoSlidesExtractor.rc)
+# which is already included in SOURCES for WIN32 builds
 
 
 include(GNUInstallDirs)

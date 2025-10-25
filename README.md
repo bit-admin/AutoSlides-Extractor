@@ -45,7 +45,7 @@ AutoSlides Extractor is a cross-platform desktop application that intelligently 
 Download the latest version for your platform:
 
 #### macOS
-- **[AutoSlides.Extractor-macOS-arm64.dmg](/releases)** - Apple Silicon only
+- **[AutoSlides.Extractor-macOS-arm64.dmg](https://github.com/bit-admin/AutoSlides-Extractor/releases)** - Apple Silicon only
 
 **Important for macOS users**: After installation, you need to remove the quarantine attribute by running this command in Terminal:
 ```bash
@@ -53,8 +53,8 @@ sudo xattr -d com.apple.quarantine /Applications/AutoSlides\ Extractor.app
 ```
 
 #### Windows
-- **[AutoSlides.Extractor-Windows-x64-Setup.exe](/releases)** - NSIS installer
-- **[AutoSlides.Extractor-Windows-x64-Portable.zip](/releases)** - Portable version
+- **[AutoSlides.Extractor-Windows-x64-Setup.exe](https://github.com/bit-admin/AutoSlides-Extractor/releases)** - NSIS installer
+- **[AutoSlides.Extractor-Windows-x64-Portable.zip](https://github.com/bit-admin/AutoSlides-Extractor/releases)** - Portable version
 
 ### System Requirements
 
