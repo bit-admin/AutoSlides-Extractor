@@ -1,4 +1,5 @@
 #include "ssimcalculator.h"
+#include "imageiohelper.h"
 #include "memoryoptimizer.h"
 #include <iostream>
 #include <algorithm>
@@ -534,8 +535,9 @@ SSIMCalculator::SSIMCalculator(QObject* parent) : QObject(parent)
 
 double SSIMCalculator::calculateGlobalSSIM(const std::string& img1Path, const std::string& img2Path)
 {
-    cv::Mat img1 = cv::imread(img1Path, cv::IMREAD_COLOR);
-    cv::Mat img2 = cv::imread(img2Path, cv::IMREAD_COLOR);
+    // Use Unicode-safe helper for image loading
+    cv::Mat img1 = ImageIOHelper::imreadUnicode(img1Path, cv::IMREAD_COLOR);
+    cv::Mat img2 = ImageIOHelper::imreadUnicode(img2Path, cv::IMREAD_COLOR);
 
     if (img1.empty() || img2.empty()) {
         std::cerr << "Error: Could not load images from " << img1Path << " or " << img2Path << std::endl;
@@ -791,9 +793,9 @@ void SSIMCalculator::processBatch(const std::vector<SSIMTask>& tasks,
                                       task.downsampleWidth,
                                       task.downsampleHeight);
         } else {
-            // For file-based input, load images and apply downsampling
-            cv::Mat img1 = cv::imread(task.img1Path, cv::IMREAD_COLOR);
-            cv::Mat img2 = cv::imread(task.img2Path, cv::IMREAD_COLOR);
+            // For file-based input, load images using Unicode-safe helper
+            cv::Mat img1 = ImageIOHelper::imreadUnicode(task.img1Path, cv::IMREAD_COLOR);
+            cv::Mat img2 = ImageIOHelper::imreadUnicode(task.img2Path, cv::IMREAD_COLOR);
 
             if (img1.empty() || img2.empty()) {
                 score = 0.0;

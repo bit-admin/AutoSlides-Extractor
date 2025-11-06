@@ -53,7 +53,7 @@ PerformanceMonitor::PerformanceMonitor() {
     // Initialize default log file path
     QString appDataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(appDataDir);
-    m_logFilePath = appDataDir.toStdString() + "/autoslides_performance.log";
+    m_logFilePath = QDir(appDataDir).filePath("autoslides_performance.log").toStdString();
 }
 
 PerformanceMonitor::~PerformanceMonitor() {

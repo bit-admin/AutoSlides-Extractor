@@ -37,6 +37,12 @@ public:
     void stopProcessing();
 
     /**
+     * Force stop processing immediately, killing all running processes
+     * This will interrupt FFmpeg operations and mark current video as error
+     */
+    void forceStop();
+
+    /**
      * Check if thread is currently processing
      * @return true if processing
      */
@@ -168,6 +174,12 @@ private:
     QWaitCondition m_queueNotEmpty;
     std::unique_ptr<FrameChunk> m_sharedQueue;  // Capacity = 1 queue
     bool m_producerFinished;
+    int m_totalFramesExtracted;  // Total frames that will be extracted (set by producer)
+    double m_currentExtractionProgress;  // Current frame extraction progress (0-100)
+
+    // Current decoder for cancellation support
+    HardwareDecoder* m_currentDecoder;
+    QMutex m_decoderMutex;
 
     // Pause between videos (in milliseconds)
     static const int INTER_VIDEO_PAUSE_MS = 2000;

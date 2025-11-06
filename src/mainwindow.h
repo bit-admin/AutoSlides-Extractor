@@ -46,6 +46,11 @@ private slots:
     void onOutputDirBrowseClicked();
     void onSettingsClicked();
 
+    // Post-processing slots
+    void onEnablePostProcessingToggled();
+    void onPostProcessingSettingsClicked();
+    void onManualPostProcessingClicked();
+
     // Processing thread slots
     void onProcessingStarted();
     void onProcessingPaused();
@@ -70,25 +75,35 @@ private slots:
 
 private:
     void setupUI();
+    void setupLeftPanel();
+    void setupRightPanel();
     void setupVideoInputSection();
     void setupOutputDirectorySection();
     void setupControlSection();
     void setupQueueSection();
     void setupProgressSection();
     void setupStatusSection();
+    void setupPostProcessingSection();
+    void setupPostProcessingResultsSection();
 
     void loadConfiguration();
     void saveConfiguration();
     void updateControlButtons();
     void updateQueueTable();
+    void updatePostProcessingTable();
     void updateFrameExtractionProgress(int videoIndex, double percentage);
     void updateSlideProcessingProgress(int videoIndex, double percentage);
     void resetProgressBars(int videoIndex);
     void connectSignals();
+    void performPostProcessing(int videoIndex);
 
     // UI Components
     QWidget* m_centralWidget;
-    QVBoxLayout* m_mainLayout;
+    QHBoxLayout* m_mainLayout;
+
+    // Left Panel
+    QWidget* m_leftPanel;
+    QVBoxLayout* m_leftLayout;
 
     // Video Input Section
     QGroupBox* m_videoInputGroup;
@@ -124,6 +139,22 @@ private:
     QGroupBox* m_statusGroup;
     QTextEdit* m_statusText;
 
+    // Right Panel - Post-Processing
+    QWidget* m_rightPanel;
+    QVBoxLayout* m_rightLayout;
+
+    // Post-Processing Controls
+    QGroupBox* m_postProcessingGroup;
+    QCheckBox* m_enablePostProcessingCheckBox;
+    QCheckBox* m_deleteRedundantCheckBox;
+    QCheckBox* m_compareExcludedCheckBox;
+    QPushButton* m_postProcessingSettingsButton;
+    QPushButton* m_manualPostProcessingButton;
+
+    // Post-Processing Results
+    QGroupBox* m_postProcessingResultsGroup;
+    QTableWidget* m_postProcessingTable;
+
     // Backend components
     std::unique_ptr<VideoQueue> m_videoQueue;
     std::unique_ptr<ProcessingThread> m_processingThread;
@@ -132,6 +163,10 @@ private:
 
     // UI update timer
     QTimer* m_uiUpdateTimer;
+
+    // Progress tracking to prevent shaking
+    int m_lastFrameExtractionProgress = -1;
+    int m_lastSlideProcessingProgress = -1;
 
     // Table columns
     enum QueueTableColumns {

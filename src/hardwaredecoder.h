@@ -5,6 +5,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <atomic>
 #include <opencv2/opencv.hpp>
 #include "memoryoptimizer.h"
 
@@ -170,6 +171,17 @@ public:
     void close();
 
     /**
+     * Request cancellation of current operation
+     * This will interrupt FFmpeg operations like av_read_frame
+     */
+    void requestCancellation();
+
+    /**
+     * Reset cancellation flag
+     */
+    void resetCancellation();
+
+    /**
      * Check if hardware acceleration is available
      * @return true if hardware acceleration is supported and available
      */
@@ -289,8 +301,14 @@ private:
     uint8_t* m_buffer;
     size_t m_bufferSize;
 
+    // Cancellation support
+    std::atomic<bool> m_shouldCancel;
+
     // Static initialization flag
     static bool s_ffmpegInitialized;
+
+    // FFmpeg interrupt callback
+    static int interruptCallback(void* ctx);
 };
 
 #endif // HARDWAREDECODER_H

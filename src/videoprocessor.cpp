@@ -1,6 +1,8 @@
 #include "videoprocessor.h"
+#include "imageiohelper.h"
 #include "memoryoptimizer.h"
 #include <QDir>
+#include <QFile>
 #include <QDebug>
 #include <QFileInfo>
 #include <iostream>
@@ -153,13 +155,17 @@ std::vector<std::string> VideoProcessor::extractFrames(const std::string& videoP
     int frameCount = decoder.extractFramesAtInterval(
         [&](const cv::Mat& mat, double timestamp, int frameNumber) {
             // Generate frame filename
-            QString frameFilename = QString("%1/frame_%2.jpg")
-                .arg(QString::fromStdString(outputDir))
+            QString fileName = QString("frame_%1.jpg")
                 .arg(frameCounter + 1, 6, 10, QChar('0'));
+            QString frameFilename = QDir(QString::fromStdString(outputDir)).filePath(fileName);
 
-            // Save frame to disk
-            if (cv::imwrite(frameFilename.toStdString(), mat)) {
-                framePaths.push_back(frameFilename.toStdString());
+            // Save frame to disk using Unicode-safe helper
+            std::vector<int> compression_params;
+            compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+            compression_params.push_back(95);
+
+            if (ImageIOHelper::imwriteUnicode(frameFilename, mat, compression_params)) {
+                framePaths.push_back(frameFilename.toUtf8().toStdString());
                 frameCounter++;
                 emit frameExtracted(frameCounter, totalExpectedFrames);
             }

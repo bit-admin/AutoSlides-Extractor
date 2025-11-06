@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QString>
 #include <QDir>
+#include <QList>
 
 enum class SSIMPreset {
     Strict,
@@ -12,6 +13,9 @@ enum class SSIMPreset {
     Loose,
     Custom
 };
+
+// Forward declaration
+struct ExclusionEntry;
 
 struct AppConfig {
     QString outputDirectory;
@@ -25,6 +29,12 @@ struct AppConfig {
     int downsampleHeight;
     int chunkSize;
 
+    // Post-processing settings
+    bool enablePostProcessing;
+    bool deleteRedundant;
+    bool compareExcluded;
+    int hammingThreshold;
+
     // Default values
     AppConfig() :
         outputDirectory(QDir::homePath() + "/Downloads/SlidesExtractor"),
@@ -36,7 +46,11 @@ struct AppConfig {
         enableDownsampling(true),
         downsampleWidth(480),
         downsampleHeight(270),
-        chunkSize(500)
+        chunkSize(500),
+        enablePostProcessing(true),
+        deleteRedundant(true),
+        compareExcluded(true),
+        hammingThreshold(10)
     {}
 };
 
@@ -81,6 +95,18 @@ public:
      */
     static SSIMPreset getPresetFromName(const QString& name);
 
+    /**
+     * Load exclusion list from settings
+     * @return List of exclusion entries
+     */
+    QList<ExclusionEntry> loadExclusionList();
+
+    /**
+     * Save exclusion list to settings
+     * @param exclusionList List of exclusion entries to save
+     */
+    void saveExclusionList(const QList<ExclusionEntry>& exclusionList);
+
 private:
     QSettings* m_settings;
 
@@ -95,6 +121,13 @@ private:
     static const QString KEY_DOWNSAMPLE_WIDTH;
     static const QString KEY_DOWNSAMPLE_HEIGHT;
     static const QString KEY_CHUNK_SIZE;
+    static const QString KEY_ENABLE_POST_PROCESSING;
+    static const QString KEY_DELETE_REDUNDANT;
+    static const QString KEY_COMPARE_EXCLUDED;
+    static const QString KEY_HAMMING_THRESHOLD;
+    static const QString KEY_EXCLUSION_LIST_SIZE;
+    static const QString KEY_EXCLUSION_REMARK;
+    static const QString KEY_EXCLUSION_HASH;
 };
 
 #endif // CONFIGMANAGER_H

@@ -422,10 +422,14 @@ bool MappedFrameChunk::initializeMapping() {
 
 #ifdef _WIN32
     // Windows implementation using CreateFileMapping
-    m_tempFilePath = tempDir.toStdString() + "/autoslides_chunk_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(GetTickCount64());
+    QString fileName = QString("autoslides_chunk_%1_%2")
+        .arg(GetCurrentProcessId())
+        .arg(GetTickCount64());
+    QString fullPath = QDir(tempDir).filePath(fileName);
+    m_tempFilePath = fullPath.toUtf8().toStdString();
 
-    // Create temporary file
-    std::wstring wTempPath(m_tempFilePath.begin(), m_tempFilePath.end());
+    // Create temporary file - use QString's toStdWString for proper UTF-16 conversion
+    std::wstring wTempPath = fullPath.toStdWString();
     HANDLE hFile = CreateFileW(
         wTempPath.c_str(),
         GENERIC_READ | GENERIC_WRITE,
@@ -490,7 +494,7 @@ bool MappedFrameChunk::initializeMapping() {
 
 #else
     // Unix/Linux/macOS implementation using mmap
-    m_tempFilePath = tempDir.toStdString() + "/autoslides_chunk_XXXXXX";
+    m_tempFilePath = QDir(tempDir).filePath("autoslides_chunk_XXXXXX").toStdString();
 
     // Create temporary file
     std::vector<char> templateStr(m_tempFilePath.begin(), m_tempFilePath.end());
