@@ -173,6 +173,20 @@ bool VideoQueue::isProcessing() const
     return false;
 }
 
+void VideoQueue::resetErrorVideos()
+{
+    for (auto& video : m_videos) {
+        if (video.status == ProcessingStatus::Error) {
+            video.status = ProcessingStatus::Queued;
+            video.errorMessage.clear();
+            video.startTime = QDateTime();
+            video.endTime = QDateTime();
+            video.processingTimeSeconds = 0.0;
+            emit statusChanged(static_cast<int>(&video - &m_videos[0]), ProcessingStatus::Queued);
+        }
+    }
+}
+
 QString VideoQueue::getStatusString(ProcessingStatus status)
 {
     switch (status) {

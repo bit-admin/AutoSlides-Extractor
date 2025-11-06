@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 1.0.0 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 1.0.1 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -333,6 +333,9 @@ set(SOURCES
     src/optimizationmanager.cpp
     src/gpuacceleration.cpp
     src/performancemonitor.cpp
+    src/phashcalculator.cpp
+    src/trashmanager.cpp
+    src/postprocessor.cpp
 )
 
 # Add Windows resource file for icon
@@ -357,6 +360,9 @@ set(HEADERS
     src/optimizationmanager.h
     src/gpuacceleration.h
     src/performancemonitor.h
+    src/phashcalculator.h
+    src/trashmanager.h
+    src/postprocessor.h
 )
 
 # Create executable

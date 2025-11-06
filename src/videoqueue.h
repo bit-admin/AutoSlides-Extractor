@@ -27,13 +27,18 @@ struct VideoQueueItem {
     QString errorMessage;
     double processingTimeSeconds;
 
+    // Post-processing statistics
+    int movedToTrash;
+    QString outputDirectory;
+
     VideoQueueItem(const QString& path) :
         filePath(path),
         fileName(QFileInfo(path).fileName()),
         status(ProcessingStatus::Queued),
         addedTime(QDateTime::currentDateTime()),
         extractedSlides(0),
-        processingTimeSeconds(0.0)
+        processingTimeSeconds(0.0),
+        movedToTrash(0)
     {}
 };
 
@@ -126,6 +131,11 @@ public:
      * @return true if processing
      */
     bool isProcessing() const;
+
+    /**
+     * Reset error videos back to queued status for retry
+     */
+    void resetErrorVideos();
 
     /**
      * Get status as string

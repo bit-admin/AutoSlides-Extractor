@@ -14,7 +14,8 @@ ProcessingThread::ProcessingThread(VideoQueue* videoQueue, QObject *parent)
       m_shouldPause(false),
       m_isProcessing(false),
       m_currentVideoIndex(-1),
-      m_producerFinished(false)
+      m_producerFinished(false),
+      m_currentDecoder(nullptr)
 {
     m_videoProcessor = std::make_unique<VideoProcessor>(this);
     m_slideDetector = std::make_unique<SlideDetector>(this);
@@ -65,6 +66,34 @@ void ProcessingThread::stopProcessing()
     QMutexLocker locker(&m_mutex);
     m_shouldStop = true;
     m_condition.wakeOne();
+}
+
+void ProcessingThread::forceStop()
+{
+    // Set stop flags
+    {
+        QMutexLocker locker(&m_mutex);
+        m_shouldStop = true;
+        m_shouldPause = false;
+    }
+
+    // Cancel the current decoder if it exists
+    {
+        QMutexLocker locker(&m_decoderMutex);
+        if (m_currentDecoder) {
+            m_currentDecoder->requestCancellation();
+        }
+    }
+
+    // Mark current video as error if processing
+    if (m_currentVideoIndex >= 0) {
+        m_videoQueue->updateStatus(m_currentVideoIndex, ProcessingStatus::Error);
+    }
+
+    // Wake up all waiting threads
+    m_condition.wakeAll();
+    m_queueNotFull.wakeAll();
+    m_queueNotEmpty.wakeAll();
 }
 
 bool ProcessingThread::isProcessing() const
@@ -187,10 +216,18 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         // Step 2: Initialize processing state for chunk-based processing
         m_processingState.reset();
         m_producerFinished = false;
+        m_currentExtractionProgress = 0.0;
+
+        // Estimate total frames that will be extracted (duration / 2 second interval)
+        // This is an estimate used for progress calculation
+        int estimatedTotalFrames = static_cast<int>(videoInfo.duration / 2.0);
+        m_totalFramesExtracted = estimatedTotalFrames;
+
         m_sharedQueue.reset();
 
         // Prepare output directory
         QString outputDir = createOutputDirectory(video->filePath, m_config.outputDirectory);
+        video->outputDirectory = outputDir;  // Store for post-processing
         QFileInfo videoFileInfo(video->filePath);
         QString videoName = videoFileInfo.baseName();
 
@@ -330,9 +367,20 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
     try {
         // Create hardware decoder for chunk-based extraction
         HardwareDecoder decoder;
+
+        // Register decoder for cancellation support
+        {
+            QMutexLocker locker(&m_decoderMutex);
+            m_currentDecoder = &decoder;
+        }
+
         if (!decoder.openVideo(videoPath)) {
             QMutexLocker locker(&m_mutex);
             m_currentError = "Failed to open video for chunk extraction";
+
+            // Unregister decoder
+            QMutexLocker decoderLocker(&m_decoderMutex);
+            m_currentDecoder = nullptr;
             return;
         }
 
@@ -371,6 +419,13 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
         auto progressCallback = [this](double currentTime, double totalTime, double percentage) {
             Q_UNUSED(currentTime)
             Q_UNUSED(totalTime)
+
+            // Store current extraction progress for slide detection progress calculation
+            {
+                QMutexLocker locker(&m_queueMutex);
+                m_currentExtractionProgress = percentage;
+            }
+
             emit frameExtractionProgress(m_currentVideoIndex, percentage);
         };
 
@@ -385,8 +440,22 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
         if (totalFrames <= 0) {
             QMutexLocker locker(&m_mutex);
             m_currentError = "No frames extracted from video";
+
+            // Unregister decoder
+            QMutexLocker decoderLocker(&m_decoderMutex);
+            m_currentDecoder = nullptr;
             return;
         }
+
+        // Update total frames with actual count (replaces the estimate)
+        {
+            QMutexLocker locker(&m_queueMutex);
+            m_totalFramesExtracted = totalFrames;
+            m_currentExtractionProgress = 100.0;
+        }
+
+        // Emit final 100% progress for frame extraction
+        emit frameExtractionProgress(m_currentVideoIndex, 100.0);
 
         // Mark producer as finished
         {
@@ -397,6 +466,12 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
 
         decoder.close();
 
+        // Unregister decoder
+        {
+            QMutexLocker locker(&m_decoderMutex);
+            m_currentDecoder = nullptr;
+        }
+
     } catch (const std::exception& e) {
         QMutexLocker locker(&m_mutex);
         m_currentError = QString("Producer thread error: %1").arg(e.what());
@@ -405,6 +480,10 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
         QMutexLocker queueLocker(&m_queueMutex);
         m_producerFinished = true;
         m_queueNotEmpty.wakeOne();
+
+        // Unregister decoder
+        QMutexLocker decoderLocker(&m_decoderMutex);
+        m_currentDecoder = nullptr;
     }
 }
 
@@ -511,20 +590,25 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
 
                 processedChunks++;
 
-                // Calculate slide processing progress based on processed frames
-                int totalFramesProcessed = chunk->startOffset + static_cast<int>(chunk->frames.size());
+                // Calculate slide processing progress based on frame extraction progress
+                // The slide detection progress should match the frame extraction progress
+                // since we process chunks as they arrive
+                double extractionProgress = 0.0;
+                {
+                    QMutexLocker locker(&m_queueMutex);
+                    extractionProgress = m_currentExtractionProgress;
+                }
 
-                // For progress calculation, we need to estimate total frames
-                // We can use the current frame rate and video duration, but for simplicity,
-                // we'll use a chunk-based progress that updates as we process
                 if (chunk->isLastChunk) {
-                    // Final chunk - set progress to 100%
+                    // Final chunk - always set progress to 100%
                     emit slideDetectionProgress(videoIndex, 100, 100);
                 } else {
-                    // Estimate progress based on processed chunks
-                    // This is approximate but provides better user feedback
-                    int estimatedProgress = std::min(95, (processedChunks * 80) / std::max(1, processedChunks + 1));
-                    emit slideDetectionProgress(videoIndex, estimatedProgress, 100);
+                    // Use the frame extraction progress as the slide detection progress
+                    // This ensures they stay synchronized
+                    int progressPercentage = static_cast<int>(extractionProgress);
+                    // Cap at 99% until the last chunk
+                    progressPercentage = std::min(99, std::max(1, progressPercentage));
+                    emit slideDetectionProgress(videoIndex, progressPercentage, 100);
                 }
             }
 

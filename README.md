@@ -2,9 +2,9 @@
 
 **Automatically extract slide images from video presentations using advanced computer vision**
 
-AutoSlides Extractor is a cross-platform desktop application that intelligently identifies and extracts distinct slides from presentation videos. Using sophisticated computer vision algorithms, particularly Structural Similarity Index (SSIM) calculations, the application automatically detects when slide content changes significantly and saves each unique slide as a high-quality image.
+AutoSlides Extractor is a cross-platform desktop application that intelligently identifies and extracts distinct slides from presentation videos. Using sophisticated computer vision algorithms, particularly Structural Similarity Index (SSIM) calculations, the application automatically detects when slide content changes significantly and saves each unique slide as a high-quality image. Version 1.0.1 introduces intelligent post-processing using perceptual hashing (pHash) to automatically remove redundant and unwanted slides.
 
-![AutoSlides Extractor](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![AutoSlides Extractor](https://img.shields.io/badge/version-1.0.1-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
@@ -12,6 +12,7 @@ AutoSlides Extractor is a cross-platform desktop application that intelligently 
 
 ### Core Functionality
 - **Intelligent Slide Detection**: Advanced two-stage algorithm using SSIM (Structural Similarity Index) to identify unique slides
+- **Smart Post-Processing**: Automatic removal of redundant and unwanted slides using perceptual hashing (pHash)
 - **Hardware-Accelerated Processing**: Automatic detection and utilization of GPU acceleration (CUDA, OpenCL, Metal, DirectX, Vulkan)
 - **Multi-Format Support**: Compatible with all major video formats (MP4, AVI, MOV, MKV, WMV, FLV, WebM)
 - **Batch Processing**: Process multiple videos simultaneously with queue management
@@ -19,9 +20,11 @@ AutoSlides Extractor is a cross-platform desktop application that intelligently 
 
 ### Advanced Computer Vision
 - **SSIM-Based Analysis**: Uses Structural Similarity Index for precise slide change detection
+- **Perceptual Hashing**: pHash-based duplicate detection and exclusion list matching
 - **Configurable Sensitivity**: Multiple SSIM presets (Strict, Normal, Loose, Custom) for different video types
 - **Frame Verification**: Multi-frame stability verification to eliminate false positives
 - **Intelligent Sampling**: Optimized I-frame sampling reduces processing time while maintaining accuracy
+- **Smart Cleanup**: Automatically removes duplicate slides and matches against exclusion patterns
 
 ### Performance Optimizations
 - **SIMD Instructions**: Automatic detection and use of SSE4.2, AVX2, AVX512 (x86/x64) and NEON (ARM64)
@@ -35,7 +38,9 @@ AutoSlides Extractor is a cross-platform desktop application that intelligently 
 ### User Experience
 - **Intuitive GUI**: Clean, modern Qt6-based interface with real-time progress tracking
 - **Flexible Configuration**: Adjustable processing parameters and output settings
-- **Status Monitoring**: Detailed logging and progress visualization
+- **Post-Processing Controls**: Easy-to-use interface for managing redundancy removal and exclusion lists
+- **Manual Post-Processing**: Process existing slide folders with post-processing algorithms
+- **Status Monitoring**: Detailed logging and progress visualization with post-processing statistics
 - **Cross-Platform**: Native performance on macOS, Windows, and Linux
 
 ## 📥 Download & Installation
@@ -84,6 +89,12 @@ AutoSlides Extractor uses a sophisticated two-stage algorithm to identify unique
    - Uses multi-frame verification to eliminate false positives from animations or transitions
    - Ensures each extracted slide represents meaningful content
 
+3. **Stage 3 - Post-Processing (New in v1.0.1)**:
+   - Calculates perceptual hash (pHash) for each extracted slide
+   - Removes duplicate slides by comparing Hamming distances between hashes
+   - Matches slides against exclusion list to remove unwanted patterns (title slides, blank slides, etc.)
+   - Moves unwanted slides to system trash instead of permanent deletion
+
 ### SSIM (Structural Similarity Index)
 
 The application uses SSIM to measure the structural similarity between frames:
@@ -117,6 +128,7 @@ The application uses SSIM to measure the structural similarity between frames:
    - Click "Start" to begin slide extraction
    - Monitor progress with real-time status updates
    - View extracted slide count for each video
+   - Post-processing automatically removes redundant and excluded slides (if enabled)
 
 ### Settings Configuration
 
@@ -131,6 +143,14 @@ The application uses SSIM to measure the structural similarity between frames:
 - **Verification Count**: Number of frames for stability verification (default: 3)
 - **Downsampling**: Reduce frame size for anti-aliasing (recommended: enabled)
 - **Chunk Size**: Memory optimization for large videos (default: 500 frames)
+
+#### Post-Processing Options (New in v1.0.1)
+- **Enable Post-Processing**: Automatically process slides after extraction
+- **Delete Redundant Slides**: Remove duplicate slides based on pHash similarity
+- **Compare with Exclusion List**: Match slides against predefined patterns
+- **Hamming Threshold**: Sensitivity for pHash matching (default: 10, lower = stricter)
+- **Exclusion List Management**: Add, edit, or remove exclusion entries
+- **Manual Post-Processing**: Process existing folders of extracted slides
 
 ### Processing Queue Management
 
@@ -153,7 +173,7 @@ AutoSlides Extractor employs a sophisticated multi-layered architecture:
 
 #### Processing Pipeline
 ```
-Video Input → Hardware Decoder → Frame Extraction → SSIM Analysis → Slide Detection → Image Output
+Video Input → Hardware Decoder → Frame Extraction → SSIM Analysis → Slide Detection → Image Output → Post-Processing (pHash)
 ```
 
 #### Key Components
@@ -161,6 +181,9 @@ Video Input → Hardware Decoder → Frame Extraction → SSIM Analysis → Slid
 - **HardwareDecoder**: Platform-specific hardware-accelerated video decoding
 - **SSIMCalculator**: Multi-threaded SSIM calculations with SIMD optimizations
 - **SlideDetector**: Two-stage slide detection algorithm implementation
+- **PHashCalculator**: Perceptual hash calculation for image similarity detection
+- **PostProcessor**: Intelligent post-processing to remove redundant and excluded slides
+- **TrashManager**: Cross-platform trash/recycle bin management
 - **MemoryOptimizer**: Chunk-based processing for memory efficiency
 
 ### Hardware Acceleration
@@ -266,7 +289,7 @@ cmake -DENABLE_CUDA=ON -DENABLE_OPENCL=ON ..
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE.txt](LICENSE.txt) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 

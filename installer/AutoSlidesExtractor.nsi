@@ -23,12 +23,12 @@ InstallDirRegKey HKLM "Software\AutoSlidesExtractor" "Install_Dir"
 RequestExecutionLevel admin
 
 ; Version Information
-VIProductVersion "1.0.0.0"
+VIProductVersion "1.0.1.0"
 VIAddVersionKey "ProductName" "AutoSlides Extractor"
 VIAddVersionKey "CompanyName" "AutoSlides Project"
 VIAddVersionKey "LegalCopyright" "Copyright © 2025 bit-admin"
 VIAddVersionKey "FileDescription" "AutoSlides Extractor Installer"
-VIAddVersionKey "FileVersion" "1.0.0.0"
+VIAddVersionKey "FileVersion" "1.0.1.0"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "InternalName" "AutoSlidesExtractor"
 VIAddVersionKey "OriginalFilename" "AutoSlidesExtractor-Setup.exe"

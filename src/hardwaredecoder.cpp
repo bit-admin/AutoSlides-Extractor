@@ -23,6 +23,7 @@ HardwareDecoder::HardwareDecoder()
     , m_samplingStrategy(SamplingStrategy::UseAllIFrames)
     , m_buffer(nullptr)
     , m_bufferSize(0)
+    , m_shouldCancel(false)
 {
     initializeFFmpeg();
 }
@@ -43,6 +44,20 @@ void HardwareDecoder::initializeFFmpeg()
 bool HardwareDecoder::openVideo(const std::string& videoPath)
 {
     close(); // Clean up any previous state
+
+    // Reset cancellation flag
+    m_shouldCancel = false;
+
+    // Allocate format context
+    m_formatContext = avformat_alloc_context();
+    if (!m_formatContext) {
+        m_lastError = "Could not allocate format context";
+        return false;
+    }
+
+    // Set up interrupt callback to allow cancellation
+    m_formatContext->interrupt_callback.callback = interruptCallback;
+    m_formatContext->interrupt_callback.opaque = this;
 
     // Open input file
     if (avformat_open_input(&m_formatContext, videoPath.c_str(), nullptr, nullptr) < 0) {
@@ -512,7 +527,22 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
     std::vector<cv::Mat> currentChunk;
     int chunkStartOffset = 0;
 
-    while (av_read_frame(m_formatContext, m_packet) >= 0) {
+    while (true) {
+        // Check for cancellation before reading next frame
+        if (m_shouldCancel) {
+            m_lastError = "Operation cancelled by user";
+            return -1;
+        }
+
+        int ret = av_read_frame(m_formatContext, m_packet);
+        if (ret < 0) {
+            // Check if it was cancelled or EOF
+            if (m_shouldCancel) {
+                m_lastError = "Operation cancelled by user";
+                return -1;
+            }
+            break; // EOF or error
+        }
         if (m_packet->stream_index == m_videoStreamIndex) {
             // Check if this is an I-frame
             bool isIFrame = (m_packet->flags & AV_PKT_FLAG_KEY);
@@ -921,4 +951,24 @@ void HardwareDecoder::close()
     m_useHardwareAcceleration = false;
     m_bufferSize = 0;
     m_lastError.clear();
+    m_shouldCancel = false;
+}
+
+void HardwareDecoder::requestCancellation()
+{
+    m_shouldCancel = true;
+}
+
+void HardwareDecoder::resetCancellation()
+{
+    m_shouldCancel = false;
+}
+
+int HardwareDecoder::interruptCallback(void* ctx)
+{
+    HardwareDecoder* decoder = static_cast<HardwareDecoder*>(ctx);
+    if (decoder && decoder->m_shouldCancel) {
+        return 1; // Return non-zero to interrupt FFmpeg operations
+    }
+    return 0; // Return 0 to continue
 }
