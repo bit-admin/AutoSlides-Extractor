@@ -48,8 +48,9 @@ private slots:
 
     // Post-processing slots
     void onEnablePostProcessingToggled();
-    void onPostProcessingSettingsClicked();
     void onManualPostProcessingClicked();
+    void onReviewTrashClicked();
+    void onPdfMakerClicked();
 
     // Processing thread slots
     void onProcessingStarted();
@@ -84,13 +85,12 @@ private:
     void setupProgressSection();
     void setupStatusSection();
     void setupPostProcessingSection();
-    void setupPostProcessingResultsSection();
+    void updateMLModelInfo();
 
     void loadConfiguration();
     void saveConfiguration();
     void updateControlButtons();
     void updateQueueTable();
-    void updatePostProcessingTable();
     void updateFrameExtractionProgress(int videoIndex, double percentage);
     void updateSlideProcessingProgress(int videoIndex, double percentage);
     void resetProgressBars(int videoIndex);
@@ -109,7 +109,6 @@ private:
     QGroupBox* m_videoInputGroup;
     QPushButton* m_addVideosButton;
     QPushButton* m_removeVideoButton;
-    QPushButton* m_settingsButton;
 
     // Output Directory Section
     QGroupBox* m_outputGroup;
@@ -121,6 +120,9 @@ private:
     QPushButton* m_startButton;
     QPushButton* m_pauseButton;
     QPushButton* m_resetButton;
+    QPushButton* m_settingsButton;
+    QPushButton* m_pdfMakerButton;
+    QPushButton* m_reviewTrashButton;
 
     // Queue Section
     QGroupBox* m_queueGroup;
@@ -148,12 +150,9 @@ private:
     QCheckBox* m_enablePostProcessingCheckBox;
     QCheckBox* m_deleteRedundantCheckBox;
     QCheckBox* m_compareExcludedCheckBox;
-    QPushButton* m_postProcessingSettingsButton;
+    QCheckBox* m_enableMLClassificationCheckBox;
+    QLabel* m_mlModelInfoLabel;
     QPushButton* m_manualPostProcessingButton;
-
-    // Post-Processing Results
-    QGroupBox* m_postProcessingResultsGroup;
-    QTableWidget* m_postProcessingTable;
 
     // Backend components
     std::unique_ptr<VideoQueue> m_videoQueue;
@@ -172,8 +171,11 @@ private:
     enum QueueTableColumns {
         COL_FILENAME = 0,
         COL_STATUS = 1,
-        COL_SLIDES = 2,
-        COL_TIME = 3
+        COL_TIME = 2,
+        COL_EXTRACTED = 3,
+        COL_PHASH = 4,
+        COL_ML = 5,
+        COL_SAVED = 6
     };
 };
 

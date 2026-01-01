@@ -28,7 +28,9 @@ struct VideoQueueItem {
     double processingTimeSeconds;
 
     // Post-processing statistics
-    int movedToTrash;
+    int movedToTrash;           // Total moved to trash (pHash + ML)
+    int movedByPHash;           // Removed by pHash post-processing
+    int movedByML;              // Removed by ML classification
     QString outputDirectory;
 
     VideoQueueItem(const QString& path) :
@@ -38,7 +40,9 @@ struct VideoQueueItem {
         addedTime(QDateTime::currentDateTime()),
         extractedSlides(0),
         processingTimeSeconds(0.0),
-        movedToTrash(0)
+        movedToTrash(0),
+        movedByPHash(0),
+        movedByML(0)
     {}
 };
 

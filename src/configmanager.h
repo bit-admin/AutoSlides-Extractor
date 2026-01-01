@@ -29,11 +29,31 @@ struct AppConfig {
     int downsampleHeight;
     int chunkSize;
 
+    // Output settings
+    int jpegQuality;
+
     // Post-processing settings
     bool enablePostProcessing;
     bool deleteRedundant;
     bool compareExcluded;
     int hammingThreshold;
+
+    // ML Classification settings
+    bool enableMLClassification;
+    bool mlDeleteMaybeSlides;  // true = delete may_be_slide images (default: true)
+    QString mlModelPath;
+    QString mlExecutionProvider;
+
+    // 2-stage classification thresholds for not_slide
+    float mlNotSlideHighThreshold;   // High confidence: delete if >= this (default: 0.9)
+    float mlNotSlideLowThreshold;    // Low confidence boundary (default: 0.75)
+
+    // 2-stage classification thresholds for may_be_slide
+    float mlMaybeSlideHighThreshold; // High confidence: delete if >= this (default: 0.9)
+    float mlMaybeSlideLowThreshold;  // Low confidence boundary (default: 0.75)
+
+    // Shared threshold for slide class in medium confidence zone
+    float mlSlideMaxThreshold;       // Delete if slide probability <= this (default: 0.25)
 
     // Default values
     AppConfig() :
@@ -46,12 +66,23 @@ struct AppConfig {
         enableDownsampling(true),
         downsampleWidth(480),
         downsampleHeight(270),
-        chunkSize(500),
+        chunkSize(100),
+        jpegQuality(95),
         enablePostProcessing(true),
         deleteRedundant(true),
         compareExcluded(true),
-        hammingThreshold(10)
-    {}
+        hammingThreshold(10),
+        enableMLClassification(true),
+        mlDeleteMaybeSlides(true),  // Default: delete may_be_slide images
+        mlModelPath(":/models/resources/models/slide_classifier_mobilenetv4_v1.onnx"),
+        mlExecutionProvider("Auto"),
+        mlNotSlideHighThreshold(0.9f),   // High confidence threshold
+        mlNotSlideLowThreshold(0.75f),   // Low confidence boundary
+        mlMaybeSlideHighThreshold(0.9f), // High confidence threshold
+        mlMaybeSlideLowThreshold(0.75f), // Low confidence boundary
+        mlSlideMaxThreshold(0.25f)       // Slide max for medium confidence zone
+    {
+    }
 };
 
 class ConfigManager : public QObject
@@ -121,6 +152,7 @@ private:
     static const QString KEY_DOWNSAMPLE_WIDTH;
     static const QString KEY_DOWNSAMPLE_HEIGHT;
     static const QString KEY_CHUNK_SIZE;
+    static const QString KEY_JPEG_QUALITY;
     static const QString KEY_ENABLE_POST_PROCESSING;
     static const QString KEY_DELETE_REDUNDANT;
     static const QString KEY_COMPARE_EXCLUDED;
@@ -128,6 +160,15 @@ private:
     static const QString KEY_EXCLUSION_LIST_SIZE;
     static const QString KEY_EXCLUSION_REMARK;
     static const QString KEY_EXCLUSION_HASH;
+    static const QString KEY_ENABLE_ML_CLASSIFICATION;
+    static const QString KEY_ML_DELETE_MAYBE_SLIDES;
+    static const QString KEY_ML_MODEL_PATH;
+    static const QString KEY_ML_EXECUTION_PROVIDER;
+    static const QString KEY_ML_NOT_SLIDE_HIGH_THRESHOLD;
+    static const QString KEY_ML_NOT_SLIDE_LOW_THRESHOLD;
+    static const QString KEY_ML_MAYBE_SLIDE_HIGH_THRESHOLD;
+    static const QString KEY_ML_MAYBE_SLIDE_LOW_THRESHOLD;
+    static const QString KEY_ML_SLIDE_MAX_THRESHOLD;
 };
 
 #endif // CONFIGMANAGER_H

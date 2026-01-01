@@ -70,16 +70,30 @@ jobs:
         C:/vcpkg/vcpkg integrate install
         Write-Host "Note: Dependencies will be installed automatically by CMake using vcpkg.json manifest"
 
-    - name: Cache CMake build
-      uses: actions/cache@v4
-      with:
-        path: |
-          build
-        key: ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}-${{ hashFiles('**/vcpkg.json') }}
-        restore-keys: |
-          ${{ runner.os }}-cmake-${{ hashFiles('**/CMakeLists.txt') }}-
-          ${{ runner.os }}-cmake-
+    - name: Download ONNX Runtime
+      run: |
+        Write-Host "Downloading ONNX Runtime for Windows with hardware acceleration..."
 
+        # Create vendor directory
+        if (-not (Test-Path "vendor")) {
+          mkdir vendor
+        }
+
+        # Download GPU version (DirectML + CUDA support)
+        $gpuUrl = "https://github.com/microsoft/onnxruntime/releases/download/v1.23.2/onnxruntime-win-x64-gpu-1.23.2.zip"
+        $gpuZip = "vendor/onnxruntime-win-x64-gpu-1.23.2.zip"
+        Write-Host "Downloading GPU version (DirectML + CUDA) from $gpuUrl"
+        Invoke-WebRequest -Uri $gpuUrl -OutFile $gpuZip -MaximumRetryCount 3 -RetryIntervalSec 5
+        Write-Host "Extracting ONNX Runtime GPU version..."
+        Expand-Archive -Path $gpuZip -DestinationPath "vendor/" -Force
+        Remove-Item $gpuZip
+
+        Write-Host "ONNX Runtime downloaded successfully"
+        Write-Host "Contents of vendor directory:"
+        ls vendor/
+
+        Write-Host "Contents of ONNX Runtime directory:"
+        ls vendor/onnxruntime-win-x64-gpu-1.23.2/
 
     - name: Configure CMake
       run: |
@@ -191,6 +205,24 @@ jobs:
         foreach ($dll in $otherDlls) {
           Copy-Item $dll.FullName package/
           Write-Host "  ✓ Copied $($dll.Name)"
+        }
+
+        # Copy ONNX Runtime DLLs (with DirectML + CUDA support)
+        Write-Host "Copying ONNX Runtime DLLs..."
+        $onnxRuntimePath = "../vendor/onnxruntime-win-x64-gpu-1.23.2/lib"
+        if (Test-Path $onnxRuntimePath) {
+          $onnxDlls = @("onnxruntime.dll", "onnxruntime_providers_shared.dll", "onnxruntime_providers_cuda.dll")
+          foreach ($dll in $onnxDlls) {
+            $dllPath = "$onnxRuntimePath/$dll"
+            if (Test-Path $dllPath) {
+              Copy-Item $dllPath package/
+              Write-Host "  ✓ Copied $dll"
+            } else {
+              Write-Host "  ⚠ $dll not found (may be optional)"
+            }
+          }
+        } else {
+          Write-Host "  ⚠ ONNX Runtime not found at $onnxRuntimePath"
         }
 
         # Create version info

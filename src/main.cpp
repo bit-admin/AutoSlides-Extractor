@@ -10,7 +10,7 @@ int main(int argc, char *argv[])
 
     // Set application properties
     app.setApplicationName("AutoSlides Extractor");
-    app.setApplicationVersion("1.0.1");
+    app.setApplicationVersion("1.1.0");
     app.setOrganizationName("AutoSlidesExtractor");
     app.setOrganizationDomain("autoslidesextractor.com");
 

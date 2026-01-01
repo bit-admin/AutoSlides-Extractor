@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/models">
+        <file>resources/models/slide_classifier_mobilenetv4_v1.onnx</file>
+        <file>resources/models/model_info.json</file>
+    </qresource>
+</RCC>

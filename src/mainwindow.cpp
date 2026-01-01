@@ -1,5 +1,8 @@
 #include "mainwindow.h"
 #include "postprocessor.h"
+#include "trashreviewdialog.h"
+#include "pdfmakerdialog.h"
+#include "trashmanager.h"
 #include <QApplication>
 #include <QMessageBox>
 #include <QHeaderView>
@@ -35,8 +38,9 @@ MainWindow::MainWindow(QWidget *parent)
     updateControlButtons();
     updateQueueTable();
 
-    setWindowTitle("AutoSlides Extractor v1.0.1");
-    resize(960, 600);  // Double width for left/right split
+    setWindowTitle("AutoSlides Extractor v1.1.0");
+    resize(960, 720);  // Double width for left/right split
+    setMinimumSize(960, 700);  // Set current size as minimum size
 }
 
 MainWindow::~MainWindow()
@@ -57,7 +61,7 @@ void MainWindow::setupUI()
     mainVerticalLayout->setSpacing(8);
     mainVerticalLayout->setContentsMargins(12, 12, 12, 12);
 
-    // Horizontal layout for left and right panels
+    // Horizontal layout for left and right panels (top section)
     m_mainLayout = new QHBoxLayout();
     m_mainLayout->setSpacing(8);
 
@@ -65,11 +69,19 @@ void MainWindow::setupUI()
     setupLeftPanel();
     setupRightPanel();
 
-    mainVerticalLayout->addLayout(m_mainLayout);
+    mainVerticalLayout->addLayout(m_mainLayout, 0);  // No stretch - fixed height top section
+
+    // Setup and add queue section (combined table - full width)
+    setupQueueSection();
+    mainVerticalLayout->addWidget(m_queueGroup, 1);  // Stretch factor to allow expansion
+
+    // Setup and add progress section (full width, horizontal layout)
+    setupProgressSection();
+    mainVerticalLayout->addWidget(m_progressGroup, 0);  // No stretch - fixed height
 
     // Setup status section (full width at bottom)
     setupStatusSection();
-    mainVerticalLayout->addWidget(m_statusGroup);
+    mainVerticalLayout->addWidget(m_statusGroup, 0);  // No stretch - keep status log at minimum height
 }
 
 void MainWindow::setupLeftPanel()
@@ -79,14 +91,26 @@ void MainWindow::setupLeftPanel()
     m_leftLayout->setSpacing(8);
     m_leftLayout->setContentsMargins(0, 0, 0, 0);
 
-    // Simplified vertical layout
-    setupOutputDirectorySection();  // Only output directory
-    setupVideoInputSection();       // Add Videos + Remove + Settings button
-    setupQueueSection();            // Increased height video list
-    setupControlSection();          // Start/Pause/Reset buttons
-    setupProgressSection();         // Progress bars (compact)
+    // Simplified vertical layout - fixed height sections only
+    setupOutputDirectorySection();  // Output directory - fixed height
+    setupVideoInputSection();       // Add Videos + Remove button - fixed height
+    setupControlSection();          // Start/Pause/Reset + Settings/PDF/Trash buttons - fixed height
 
-    m_mainLayout->addWidget(m_leftPanel);
+    // Add stretch to push everything to the top and align with right panel
+    m_leftLayout->addStretch(1);
+
+    // Copyright label centered in the remaining space
+    QLabel* copyrightLabel = new QLabel(
+        "Copyright (c) bit-admin. <a href=\"https://github.com/bit-admin/AutoSlides-Extractor\">GitHub Repo</a>",
+        m_leftPanel);
+    copyrightLabel->setOpenExternalLinks(true);
+    copyrightLabel->setAlignment(Qt::AlignCenter);
+    copyrightLabel->setStyleSheet("color: #888; font-size: 11px;");
+    m_leftLayout->addWidget(copyrightLabel);
+
+    m_leftLayout->addStretch(1);
+
+    m_mainLayout->addWidget(m_leftPanel, 1);  // Allow left panel to expand
 }
 
 void MainWindow::setupRightPanel()
@@ -96,10 +120,12 @@ void MainWindow::setupRightPanel()
     m_rightLayout->setSpacing(8);
     m_rightLayout->setContentsMargins(0, 0, 0, 0);
 
-    setupPostProcessingSection();
-    setupPostProcessingResultsSection();
+    setupPostProcessingSection();  // Fixed height
 
-    m_mainLayout->addWidget(m_rightPanel);
+    // Add stretch to push everything to the top and align with left panel
+    m_rightLayout->addStretch(1);
+
+    m_mainLayout->addWidget(m_rightPanel, 1);  // Allow right panel to expand
 }
 
 void MainWindow::setupOutputDirectorySection()
@@ -116,7 +142,7 @@ void MainWindow::setupOutputDirectorySection()
     layout->addWidget(m_outputDirEdit, 1);
     layout->addWidget(m_outputDirBrowseButton);
 
-    m_leftLayout->addWidget(m_outputGroup);
+    m_leftLayout->addWidget(m_outputGroup, 0);  // No vertical stretch - fixed height
 }
 
 void MainWindow::setupVideoInputSection()
@@ -129,48 +155,69 @@ void MainWindow::setupVideoInputSection()
     m_addVideosButton = new QPushButton("Add Videos", m_leftPanel);
     m_removeVideoButton = new QPushButton("Remove Selected", m_leftPanel);
 
-    // Settings button with text
-    m_settingsButton = new QPushButton("Settings", m_leftPanel);
-    m_settingsButton->setToolTip("Settings");
-    m_settingsButton->setFixedWidth(80);
-
-    // Layout: Add Videos and Remove Selected take most space, Settings button is small
     layout->addWidget(m_addVideosButton, 1);
     layout->addWidget(m_removeVideoButton, 1);
-    layout->addWidget(m_settingsButton);
 
-    m_leftLayout->addWidget(m_videoInputGroup);
+    m_leftLayout->addWidget(m_videoInputGroup, 0);  // No vertical stretch - fixed height
 }
 
 void MainWindow::setupControlSection()
 {
     m_controlGroup = new QGroupBox("Control", m_leftPanel);
-    QHBoxLayout* layout = new QHBoxLayout(m_controlGroup);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(8);
+    QVBoxLayout* mainLayout = new QVBoxLayout(m_controlGroup);
+    mainLayout->setContentsMargins(8, 6, 8, 6);
+    mainLayout->setSpacing(6);
+
+    // Row 1: Start, Pause, Reset
+    QHBoxLayout* row1Layout = new QHBoxLayout();
+    row1Layout->setSpacing(8);
 
     m_startButton = new QPushButton("Start", m_leftPanel);
     m_pauseButton = new QPushButton("Pause", m_leftPanel);
     m_resetButton = new QPushButton("Reset", m_leftPanel);
 
-    // Make buttons share 1/3 width each
-    layout->addWidget(m_startButton, 1);
-    layout->addWidget(m_pauseButton, 1);
-    layout->addWidget(m_resetButton, 1);
+    row1Layout->addWidget(m_startButton, 1);
+    row1Layout->addWidget(m_pauseButton, 1);
+    row1Layout->addWidget(m_resetButton, 1);
 
-    m_leftLayout->addWidget(m_controlGroup);
+    mainLayout->addLayout(row1Layout);
+
+    // Divider between rows
+    QFrame* divider = new QFrame(m_leftPanel);
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Sunken);
+    mainLayout->addWidget(divider);
+
+    // Row 2: Settings, PDF Maker, Review Trash
+    QHBoxLayout* row2Layout = new QHBoxLayout();
+    row2Layout->setSpacing(8);
+
+    m_settingsButton = new QPushButton("Settings", m_leftPanel);
+    m_settingsButton->setToolTip("Open settings dialog");
+    m_pdfMakerButton = new QPushButton("PDF Maker", m_leftPanel);
+    m_pdfMakerButton->setToolTip("Browse slide folders and create PDF");
+    m_reviewTrashButton = new QPushButton("Review Trash", m_leftPanel);
+    m_reviewTrashButton->setToolTip("Review and restore slides that were moved to trash");
+
+    row2Layout->addWidget(m_settingsButton, 1);
+    row2Layout->addWidget(m_pdfMakerButton, 1);
+    row2Layout->addWidget(m_reviewTrashButton, 1);
+
+    mainLayout->addLayout(row2Layout);
+
+    m_leftLayout->addWidget(m_controlGroup, 0);  // No vertical stretch - fixed height
 }
 
 void MainWindow::setupQueueSection()
 {
-    m_queueGroup = new QGroupBox("Processing Queue", m_leftPanel);
+    m_queueGroup = new QGroupBox("Processing Queue", m_centralWidget);
     QVBoxLayout* layout = new QVBoxLayout(m_queueGroup);
     layout->setContentsMargins(8, 6, 8, 6);
     layout->setSpacing(4);
 
-    m_queueTable = new QTableWidget(m_leftPanel);
-    m_queueTable->setColumnCount(4);
-    QStringList headers = {"Filename", "Status", "Slides", "Time (s)"};
+    m_queueTable = new QTableWidget(m_centralWidget);
+    m_queueTable->setColumnCount(7);
+    QStringList headers = {"Filename", "Status", "Time (s)", "Extracted", "- pHash", "- ML", "Saved"};
     m_queueTable->setHorizontalHeaderLabels(headers);
     m_queueTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_queueTable->setAlternatingRowColors(true);
@@ -179,72 +226,77 @@ void MainWindow::setupQueueSection()
     m_queueTable->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_queueTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
-    // Optimize column widths for 480px width vertical layout
+    // Optimize column widths for full-width table
     QHeaderView* header = m_queueTable->horizontalHeader();
     header->setSectionResizeMode(COL_FILENAME, QHeaderView::Stretch);  // Filename: flexible
-    header->setSectionResizeMode(COL_STATUS, QHeaderView::Fixed);      // Status: fixed width (wider)
-    header->setSectionResizeMode(COL_SLIDES, QHeaderView::Fixed);      // Slides: fixed width
+    header->setSectionResizeMode(COL_STATUS, QHeaderView::Fixed);      // Status: fixed width
     header->setSectionResizeMode(COL_TIME, QHeaderView::Fixed);        // Time: fixed width
+    header->setSectionResizeMode(COL_EXTRACTED, QHeaderView::Fixed);   // Extracted: fixed width
+    header->setSectionResizeMode(COL_PHASH, QHeaderView::Fixed);       // - pHash: fixed width
+    header->setSectionResizeMode(COL_ML, QHeaderView::Fixed);          // - ML: fixed width
+    header->setSectionResizeMode(COL_SAVED, QHeaderView::Fixed);       // Saved: fixed width
 
-    // Adjusted column widths for 480px window width (Status column wider)
-    m_queueTable->setColumnWidth(COL_STATUS, 120);   // Status: 120px (increased for better visibility)
-    m_queueTable->setColumnWidth(COL_SLIDES, 60);    // Slides: 60px (slightly increased)
-    m_queueTable->setColumnWidth(COL_TIME, 80);      // Time: 80px (increased)
-    // Filename column will take remaining space (~200px)
+    // Column widths
+    m_queueTable->setColumnWidth(COL_STATUS, 120);     // Status: 120px
+    m_queueTable->setColumnWidth(COL_TIME, 70);        // Time: 70px
+    m_queueTable->setColumnWidth(COL_EXTRACTED, 75);   // Extracted: 75px
+    m_queueTable->setColumnWidth(COL_PHASH, 60);       // - pHash: 60px
+    m_queueTable->setColumnWidth(COL_ML, 50);          // - ML: 50px
+    m_queueTable->setColumnWidth(COL_SAVED, 55);       // Saved: 55px
 
-    // Reduced height for better proportions
-    m_queueTable->setMinimumHeight(140);  // Further reduced for more compact layout
-    m_queueTable->setMaximumHeight(180);  // Reduced maximum height accordingly
+    m_queueTable->setMinimumHeight(140);
 
     layout->addWidget(m_queueTable);
-
-    m_leftLayout->addWidget(m_queueGroup);
 }
 
 void MainWindow::setupProgressSection()
 {
-    m_progressGroup = new QGroupBox("Progress", m_leftPanel);
-    QVBoxLayout* layout = new QVBoxLayout(m_progressGroup);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(3);  // Tighter spacing for compact layout
+    m_progressGroup = new QGroupBox("Progress", m_centralWidget);
+    QHBoxLayout* mainLayout = new QHBoxLayout(m_progressGroup);
+    mainLayout->setContentsMargins(8, 6, 8, 6);
+    mainLayout->setSpacing(16);
 
-    // Bold font for labels (keeping for potential future use)
-    QFont boldFont;
-    boldFont.setBold(true);
+    // Left side: Frame Extraction Progress
+    QVBoxLayout* frameLayout = new QVBoxLayout();
+    frameLayout->setSpacing(3);
 
-    // FFmpeg Frame Extraction Progress
-    m_frameExtractionLabel = new QLabel("Frame Extraction", m_leftPanel);
-    m_frameExtractionProgressBar = new QProgressBar(m_leftPanel);
+    m_frameExtractionLabel = new QLabel("Frame Extraction", m_centralWidget);
+    m_frameExtractionProgressBar = new QProgressBar(m_centralWidget);
     m_frameExtractionProgressBar->setRange(0, 100);
     m_frameExtractionProgressBar->setValue(0);
-    m_frameExtractionProgressBar->setMaximumHeight(14);  // More compact than original 18px
-    m_frameExtractionPercentLabel = new QLabel("0%", m_leftPanel);
+    m_frameExtractionProgressBar->setMaximumHeight(14);
+    m_frameExtractionPercentLabel = new QLabel("0%", m_centralWidget);
     m_frameExtractionPercentLabel->setMinimumWidth(35);
 
-    layout->addWidget(m_frameExtractionLabel);
+    frameLayout->addWidget(m_frameExtractionLabel);
     QHBoxLayout* frameProgressLayout = new QHBoxLayout();
     frameProgressLayout->setSpacing(6);
     frameProgressLayout->addWidget(m_frameExtractionProgressBar);
     frameProgressLayout->addWidget(m_frameExtractionPercentLabel);
-    layout->addLayout(frameProgressLayout);
+    frameLayout->addLayout(frameProgressLayout);
 
-    // Slide Processing Progress
-    m_slideProcessingLabel = new QLabel("Slide Detection", m_leftPanel);
-    m_slideProcessingProgressBar = new QProgressBar(m_leftPanel);
+    mainLayout->addLayout(frameLayout, 1);
+
+    // Right side: Slide Detection Progress
+    QVBoxLayout* slideLayout = new QVBoxLayout();
+    slideLayout->setSpacing(3);
+
+    m_slideProcessingLabel = new QLabel("Slide Detection", m_centralWidget);
+    m_slideProcessingProgressBar = new QProgressBar(m_centralWidget);
     m_slideProcessingProgressBar->setRange(0, 100);
     m_slideProcessingProgressBar->setValue(0);
-    m_slideProcessingProgressBar->setMaximumHeight(14);  // More compact than original 18px
-    m_slideProcessingPercentLabel = new QLabel("0%", m_leftPanel);
+    m_slideProcessingProgressBar->setMaximumHeight(14);
+    m_slideProcessingPercentLabel = new QLabel("0%", m_centralWidget);
     m_slideProcessingPercentLabel->setMinimumWidth(35);
 
-    layout->addWidget(m_slideProcessingLabel);
+    slideLayout->addWidget(m_slideProcessingLabel);
     QHBoxLayout* slideProgressLayout = new QHBoxLayout();
     slideProgressLayout->setSpacing(6);
     slideProgressLayout->addWidget(m_slideProcessingProgressBar);
     slideProgressLayout->addWidget(m_slideProcessingPercentLabel);
-    layout->addLayout(slideProgressLayout);
+    slideLayout->addLayout(slideProgressLayout);
 
-    m_leftLayout->addWidget(m_progressGroup);
+    mainLayout->addLayout(slideLayout, 1);
 }
 
 void MainWindow::setupStatusSection()
@@ -256,7 +308,7 @@ void MainWindow::setupStatusSection()
 
     m_statusText = new QTextEdit(m_centralWidget);
     m_statusText->setMinimumHeight(120);  // Increased from 100
-    m_statusText->setMaximumHeight(160);  // Increased from 120
+    // Removed maximum height to allow expansion
     m_statusText->setReadOnly(true);
 
     layout->addWidget(m_statusText);
@@ -267,11 +319,12 @@ void MainWindow::setupStatusSection()
 void MainWindow::setupPostProcessingSection()
 {
     m_postProcessingGroup = new QGroupBox("Post-Processing", m_rightPanel);
+    m_postProcessingGroup->setMinimumHeight(180);  // Ensure enough height for all content
     QVBoxLayout* layout = new QVBoxLayout(m_postProcessingGroup);
     layout->setContentsMargins(8, 6, 8, 6);
     layout->setSpacing(8);
 
-    // First row: Enable Post-Processing, Manual Post-Processing, Settings
+    // First row: Enable Post-Processing, Manual Post-Processing
     QHBoxLayout* topButtonLayout = new QHBoxLayout();
     topButtonLayout->setSpacing(8);
 
@@ -285,11 +338,6 @@ void MainWindow::setupPostProcessingSection()
     m_manualPostProcessingButton->setToolTip("Manually post-process a folder of images");
     topButtonLayout->addWidget(m_manualPostProcessingButton);
 
-    m_postProcessingSettingsButton = new QPushButton("Settings", m_rightPanel);
-    m_postProcessingSettingsButton->setToolTip("Configure pHash threshold and exclusion list");
-    m_postProcessingSettingsButton->setFixedWidth(80);
-    topButtonLayout->addWidget(m_postProcessingSettingsButton);
-
     layout->addLayout(topButtonLayout);
 
     // Separator
@@ -299,7 +347,7 @@ void MainWindow::setupPostProcessingSection()
     layout->addWidget(line);
 
     // Delete redundant checkbox with help text
-    m_deleteRedundantCheckBox = new QCheckBox("Delete Redundant Slides", m_rightPanel);
+    m_deleteRedundantCheckBox = new QCheckBox("Delete Redundant Slides with pHash", m_rightPanel);
     m_deleteRedundantCheckBox->setChecked(true);
     layout->addWidget(m_deleteRedundantCheckBox);
 
@@ -318,41 +366,45 @@ void MainWindow::setupPostProcessingSection()
     excludedHelpLabel->setStyleSheet("color: #666; font-size: 11px; margin-left: 20px;");
     layout->addWidget(excludedHelpLabel);
 
-    m_rightLayout->addWidget(m_postProcessingGroup);
-}
+    // ML Classification separator
+    QFrame* mlLine = new QFrame(m_rightPanel);
+    mlLine->setFrameShape(QFrame::HLine);
+    mlLine->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(mlLine);
 
-void MainWindow::setupPostProcessingResultsSection()
-{
-    m_postProcessingResultsGroup = new QGroupBox("Post-Processing Results", m_rightPanel);
-    QVBoxLayout* layout = new QVBoxLayout(m_postProcessingResultsGroup);
-    layout->setContentsMargins(8, 6, 8, 6);
-    layout->setSpacing(4);
+    // ML Classification checkbox with help text
+    m_enableMLClassificationCheckBox = new QCheckBox("Enable ML Classification", m_rightPanel);
+#ifdef ONNX_AVAILABLE
+    m_enableMLClassificationCheckBox->setChecked(true);
+#else
+    m_enableMLClassificationCheckBox->setChecked(false);
+    m_enableMLClassificationCheckBox->setEnabled(false);
+    m_enableMLClassificationCheckBox->setToolTip("ONNX Runtime not available - ML classification disabled");
+#endif
+    layout->addWidget(m_enableMLClassificationCheckBox);
 
-    QLabel* helpLabel = new QLabel("Videos and their post-processing statistics:", m_rightPanel);
-    helpLabel->setWordWrap(true);
-    helpLabel->setStyleSheet("color: #666; font-size: 11px;");
-    layout->addWidget(helpLabel);
+    QLabel* mlHelpLabel = new QLabel("Use AI model to classify and remove non-slide images. AI can make mistakes.", m_rightPanel);
+    mlHelpLabel->setWordWrap(true);
+    mlHelpLabel->setStyleSheet("color: #666; font-size: 11px; margin-left: 20px;");
+    layout->addWidget(mlHelpLabel);
 
-    m_postProcessingTable = new QTableWidget(m_rightPanel);
-    m_postProcessingTable->setColumnCount(3);
-    QStringList headers = {"Video", "Slides Saved", "Moved to Trash"};
-    m_postProcessingTable->setHorizontalHeaderLabels(headers);
-    m_postProcessingTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_postProcessingTable->setAlternatingRowColors(true);
+    // Configuration instructions
+    QLabel* mlConfigLabel = new QLabel("You can download the latest model from: "
+                                       "<a href=\"https://github.com/bit-admin/slide-classifier/releases\">GitHub Release</a>",
+                                       m_rightPanel);
+    mlConfigLabel->setWordWrap(true);
+    mlConfigLabel->setOpenExternalLinks(true);
+    mlConfigLabel->setStyleSheet("color: #555; font-size: 11px; margin-left: 20px;");
+    layout->addWidget(mlConfigLabel);
 
-    // Column widths
-    QHeaderView* header = m_postProcessingTable->horizontalHeader();
-    header->setSectionResizeMode(0, QHeaderView::Stretch);
-    header->setSectionResizeMode(1, QHeaderView::Fixed);
-    header->setSectionResizeMode(2, QHeaderView::Fixed);
-    m_postProcessingTable->setColumnWidth(1, 100);
-    m_postProcessingTable->setColumnWidth(2, 120);
+    // Model info label
+    m_mlModelInfoLabel = new QLabel(m_rightPanel);
+    m_mlModelInfoLabel->setWordWrap(true);
+    m_mlModelInfoLabel->setStyleSheet("color: #888; font-size: 10px; margin-left: 20px; font-style: italic;");
+    layout->addWidget(m_mlModelInfoLabel);
+    updateMLModelInfo();
 
-    m_postProcessingTable->setMinimumHeight(200);
-
-    layout->addWidget(m_postProcessingTable);
-
-    m_rightLayout->addWidget(m_postProcessingResultsGroup);
+    m_rightLayout->addWidget(m_postProcessingGroup, 0);  // No vertical stretch - fixed height
 }
 
 void MainWindow::connectSignals()
@@ -360,7 +412,6 @@ void MainWindow::connectSignals()
     // Video input signals
     connect(m_addVideosButton, &QPushButton::clicked, this, &MainWindow::onAddVideosClicked);
     connect(m_removeVideoButton, &QPushButton::clicked, this, &MainWindow::onRemoveVideoClicked);
-    connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onSettingsClicked);
 
     // Output directory signals
     connect(m_outputDirBrowseButton, &QPushButton::clicked, this, &MainWindow::onOutputDirBrowseClicked);
@@ -370,6 +421,9 @@ void MainWindow::connectSignals()
     connect(m_startButton, &QPushButton::clicked, this, &MainWindow::onStartClicked);
     connect(m_pauseButton, &QPushButton::clicked, this, &MainWindow::onPauseClicked);
     connect(m_resetButton, &QPushButton::clicked, this, &MainWindow::onResetClicked);
+    connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onSettingsClicked);
+    connect(m_pdfMakerButton, &QPushButton::clicked, this, &MainWindow::onPdfMakerClicked);
+    connect(m_reviewTrashButton, &QPushButton::clicked, this, &MainWindow::onReviewTrashClicked);
 
     // Processing thread signals
     connect(m_processingThread.get(), &ProcessingThread::processingStarted, this, &MainWindow::onProcessingStarted);
@@ -394,7 +448,9 @@ void MainWindow::connectSignals()
     connect(m_enablePostProcessingCheckBox, &QCheckBox::toggled, this, &MainWindow::onEnablePostProcessingToggled);
     connect(m_deleteRedundantCheckBox, &QCheckBox::toggled, this, &MainWindow::saveConfiguration);
     connect(m_compareExcludedCheckBox, &QCheckBox::toggled, this, &MainWindow::saveConfiguration);
-    connect(m_postProcessingSettingsButton, &QPushButton::clicked, this, &MainWindow::onPostProcessingSettingsClicked);
+#ifdef ONNX_AVAILABLE
+    connect(m_enableMLClassificationCheckBox, &QCheckBox::toggled, this, &MainWindow::saveConfiguration);
+#endif
     connect(m_manualPostProcessingButton, &QPushButton::clicked, this, &MainWindow::onManualPostProcessingClicked);
 }
 
@@ -409,6 +465,13 @@ void MainWindow::loadConfiguration()
     m_deleteRedundantCheckBox->setChecked(m_config.deleteRedundant);
     m_compareExcludedCheckBox->setChecked(m_config.compareExcluded);
 
+#ifdef ONNX_AVAILABLE
+    m_enableMLClassificationCheckBox->setChecked(m_config.enableMLClassification);
+#endif
+
+    // Update ML model info
+    updateMLModelInfo();
+
     // Update checkbox enabled states
     onEnablePostProcessingToggled();
 }
@@ -422,6 +485,10 @@ void MainWindow::saveConfiguration()
     m_config.enablePostProcessing = m_enablePostProcessingCheckBox->isChecked();
     m_config.deleteRedundant = m_deleteRedundantCheckBox->isChecked();
     m_config.compareExcluded = m_compareExcludedCheckBox->isChecked();
+
+#ifdef ONNX_AVAILABLE
+    m_config.enableMLClassification = m_enableMLClassificationCheckBox->isChecked();
+#endif
 
     m_configManager->saveConfig(m_config);
 }
@@ -500,8 +567,8 @@ void MainWindow::onResetClicked()
     m_videoQueue->clearCompleted();
     m_statusText->append("Queue reset - cleared completed and error items");
 
-    // Clear post-processing results table
-    updatePostProcessingTable();
+    // Update queue table to reflect cleared items
+    updateQueueTable();
 }
 
 void MainWindow::onOutputDirBrowseClicked()
@@ -675,6 +742,8 @@ void MainWindow::updateQueueTable()
     const auto& videos = m_videoQueue->getAllVideos();
     m_queueTable->setRowCount(static_cast<int>(videos.size()));
 
+    bool ppEnabled = m_config.enablePostProcessing;
+
     for (int i = 0; i < static_cast<int>(videos.size()); ++i) {
         const VideoQueueItem& video = videos[i];
 
@@ -686,15 +755,52 @@ void MainWindow::updateQueueTable()
         QTableWidgetItem* statusItem = new QTableWidgetItem(VideoQueue::getStatusString(video.status));
         m_queueTable->setItem(i, COL_STATUS, statusItem);
 
-        // Slides
-        QTableWidgetItem* slidesItem = new QTableWidgetItem(QString::number(video.extractedSlides));
-        m_queueTable->setItem(i, COL_SLIDES, slidesItem);
-
         // Time
         QString timeStr = (video.processingTimeSeconds > 0) ?
                          QString::number(video.processingTimeSeconds, 'f', 1) : "-";
         QTableWidgetItem* timeItem = new QTableWidgetItem(timeStr);
         m_queueTable->setItem(i, COL_TIME, timeItem);
+
+        // Extracted
+        QTableWidgetItem* extractedItem = new QTableWidgetItem(QString::number(video.extractedSlides));
+        m_queueTable->setItem(i, COL_EXTRACTED, extractedItem);
+
+        // - pHash (show "-" if PP disabled or not completed yet)
+        QString pHashStr;
+        if (!ppEnabled) {
+            pHashStr = "-";
+        } else if (video.status == ProcessingStatus::Completed) {
+            pHashStr = QString::number(video.movedByPHash);
+        } else {
+            pHashStr = "-";
+        }
+        QTableWidgetItem* pHashItem = new QTableWidgetItem(pHashStr);
+        m_queueTable->setItem(i, COL_PHASH, pHashItem);
+
+        // - ML (show "-" if PP disabled or not completed yet)
+        QString mlStr;
+        if (!ppEnabled) {
+            mlStr = "-";
+        } else if (video.status == ProcessingStatus::Completed) {
+            mlStr = QString::number(video.movedByML);
+        } else {
+            mlStr = "-";
+        }
+        QTableWidgetItem* mlItem = new QTableWidgetItem(mlStr);
+        m_queueTable->setItem(i, COL_ML, mlItem);
+
+        // Saved (extracted - removed, show "-" if PP disabled or not completed)
+        QString savedStr;
+        if (!ppEnabled) {
+            savedStr = "-";
+        } else if (video.status == ProcessingStatus::Completed) {
+            int saved = video.extractedSlides - video.movedToTrash;
+            savedStr = QString::number(saved);
+        } else {
+            savedStr = "-";
+        }
+        QTableWidgetItem* savedItem = new QTableWidgetItem(savedStr);
+        m_queueTable->setItem(i, COL_SAVED, savedItem);
 
         // Color coding based on status - adapted for dark/light themes
         QColor rowColor;
@@ -798,39 +904,23 @@ void MainWindow::resetProgressBars(int videoIndex)
     m_slideProcessingPercentLabel->setText("0%");
 }
 
-void MainWindow::updatePostProcessingTable()
+void MainWindow::updateMLModelInfo()
 {
-    const auto& videos = m_videoQueue->getAllVideos();
+#ifdef ONNX_AVAILABLE
+    QString modelPath = m_config.mlModelPath;
+    QString modelName;
 
-    // Filter to only show completed videos
-    QList<const VideoQueueItem*> completedVideos;
-    for (const auto& video : videos) {
-        if (video.status == ProcessingStatus::Completed) {
-            completedVideos.append(&video);
-        }
+    if (modelPath.startsWith(":/")) {
+        modelName = "Built-in - MobileNetV4 (slide_classifier_mobilenetv4_v1.onnx)";
+    } else {
+        QFileInfo fileInfo(modelPath);
+        modelName = "Custom - " + fileInfo.fileName();
     }
 
-    m_postProcessingTable->setRowCount(completedVideos.size());
-
-    for (int i = 0; i < completedVideos.size(); i++) {
-        const VideoQueueItem* video = completedVideos[i];
-
-        // Video name
-        QTableWidgetItem* nameItem = new QTableWidgetItem(video->fileName);
-        nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
-        m_postProcessingTable->setItem(i, 0, nameItem);
-
-        // Slides saved
-        int slidesSaved = video->extractedSlides - video->movedToTrash;
-        QTableWidgetItem* savedItem = new QTableWidgetItem(QString::number(slidesSaved));
-        savedItem->setFlags(savedItem->flags() & ~Qt::ItemIsEditable);
-        m_postProcessingTable->setItem(i, 1, savedItem);
-
-        // Moved to trash
-        QTableWidgetItem* trashItem = new QTableWidgetItem(QString::number(video->movedToTrash));
-        trashItem->setFlags(trashItem->flags() & ~Qt::ItemIsEditable);
-        m_postProcessingTable->setItem(i, 2, trashItem);
-    }
+    m_mlModelInfoLabel->setText(QString("Currently using: %1").arg(modelName));
+#else
+    m_mlModelInfoLabel->setText("ONNX Runtime not available - ML classification disabled");
+#endif
 }
 
 void MainWindow::performPostProcessing(int videoIndex)
@@ -852,22 +942,56 @@ void MainWindow::performPostProcessing(int videoIndex)
     // Create post-processor
     PostProcessor processor;
 
+    // Connect to processor signals for ML classification logging
+    connect(&processor, &PostProcessor::imageMovedToTrash, this, [this](const QString& filePath, const QString& reason) {
+        if (reason.startsWith("ML:")) {
+            QFileInfo fileInfo(filePath);
+            m_statusText->append(QString("  ML removed: %1 - %2").arg(fileInfo.fileName()).arg(reason));
+        }
+    });
+
+    // Connect to ML classification started signal
+    connect(&processor, &PostProcessor::mlClassificationStarted, this, [this](const QString& executionProvider) {
+        m_statusText->append(QString("ML Classification: Enabled (Using %1)").arg(executionProvider));
+    });
+
+    // Connect to ML classification failed signal
+    connect(&processor, &PostProcessor::mlClassificationFailed, this, [this](const QString& errorMessage) {
+        m_statusText->append(QString("ML Classification: Failed - %1").arg(errorMessage));
+    });
+
     // Process the directory
-    int movedCount = processor.processDirectory(
+    PostProcessingResult result = processor.processDirectory(
         video->outputDirectory,
         m_config.deleteRedundant,
         m_config.compareExcluded,
         m_config.hammingThreshold,
-        exclusionList
+        exclusionList,
+        m_config.enableMLClassification,
+        m_config.mlModelPath,
+        m_config.mlNotSlideHighThreshold,
+        m_config.mlNotSlideLowThreshold,
+        m_config.mlMaybeSlideHighThreshold,
+        m_config.mlMaybeSlideLowThreshold,
+        m_config.mlSlideMaxThreshold,
+        m_config.mlDeleteMaybeSlides,
+        m_config.mlExecutionProvider,
+        true,  // useApplicationTrash
+        m_config.outputDirectory
     );
 
     // Update video statistics
-    video->movedToTrash = movedCount;
+    video->movedToTrash = result.totalRemoved;
+    video->movedByPHash = result.removedByPHash;
+    video->movedByML = result.removedByML;
 
-    m_statusText->append(QString("Post-processing complete: %1 images moved to trash").arg(movedCount));
+    m_statusText->append(QString("Post-processing complete: %1 images moved to trash (%2 by pHash, %3 by ML)")
+        .arg(result.totalRemoved)
+        .arg(result.removedByPHash)
+        .arg(result.removedByML));
 
-    // Update post-processing table
-    updatePostProcessingTable();
+    // Update queue table with post-processing results
+    updateQueueTable();
 }
 
 void MainWindow::onEnablePostProcessingToggled()
@@ -875,22 +999,10 @@ void MainWindow::onEnablePostProcessingToggled()
     bool enabled = m_enablePostProcessingCheckBox->isChecked();
     m_deleteRedundantCheckBox->setEnabled(enabled);
     m_compareExcludedCheckBox->setEnabled(enabled);
+#ifdef ONNX_AVAILABLE
+    m_enableMLClassificationCheckBox->setEnabled(enabled);
+#endif
     saveConfiguration();
-}
-
-void MainWindow::onPostProcessingSettingsClicked()
-{
-    // Open settings dialog with post-processing tab (tab index 1)
-    SettingsDialog dialog(m_config, m_configManager.get(), 1, this);
-    connect(&dialog, &SettingsDialog::statusMessage, this, [this](const QString& message) {
-        m_statusText->append(message);
-    });
-    if (dialog.exec() == QDialog::Accepted) {
-        m_config = dialog.getConfig();
-        m_configManager->saveConfig(m_config);
-        m_processingThread->updateConfig(m_config);
-        m_statusText->append("Post-processing settings updated");
-    }
 }
 
 void MainWindow::onManualPostProcessingClicked()
@@ -911,15 +1023,85 @@ void MainWindow::onManualPostProcessingClicked()
     // Create post-processor
     PostProcessor processor;
 
+    // Connect to processor signals for ML classification logging
+    connect(&processor, &PostProcessor::imageMovedToTrash, this, [this](const QString& filePath, const QString& reason) {
+        if (reason.startsWith("ML:")) {
+            QFileInfo fileInfo(filePath);
+            m_statusText->append(QString("  ML removed: %1 - %2").arg(fileInfo.fileName()).arg(reason));
+        }
+    });
+
+    // Connect to ML classification started signal
+    connect(&processor, &PostProcessor::mlClassificationStarted, this, [this](const QString& executionProvider) {
+        m_statusText->append(QString("ML Classification: Enabled (Using %1)").arg(executionProvider));
+    });
+
+    // Connect to ML classification failed signal
+    connect(&processor, &PostProcessor::mlClassificationFailed, this, [this](const QString& errorMessage) {
+        m_statusText->append(QString("ML Classification: Failed - %1").arg(errorMessage));
+    });
+
     // Process the directory
-    int movedCount = processor.processDirectory(
+    PostProcessingResult result = processor.processDirectory(
         dir,
         m_config.deleteRedundant,
         m_config.compareExcluded,
         m_config.hammingThreshold,
-        exclusionList
+        exclusionList,
+        m_config.enableMLClassification,
+        m_config.mlModelPath,
+        m_config.mlNotSlideHighThreshold,
+        m_config.mlNotSlideLowThreshold,
+        m_config.mlMaybeSlideHighThreshold,
+        m_config.mlMaybeSlideLowThreshold,
+        m_config.mlSlideMaxThreshold,
+        m_config.mlDeleteMaybeSlides,
+        m_config.mlExecutionProvider,
+        true,  // useApplicationTrash
+        m_config.outputDirectory
     );
 
-    m_statusText->append(QString("Manual post-processing complete: %1 images moved to trash").arg(movedCount));
+    m_statusText->append(QString("Manual post-processing complete: %1 images moved to trash (%2 by pHash, %3 by ML)")
+        .arg(result.totalRemoved)
+        .arg(result.removedByPHash)
+        .arg(result.removedByML));
+}
+
+void MainWindow::onReviewTrashClicked()
+{
+    // Open trash review dialog
+    TrashReviewDialog dialog(m_config.outputDirectory, true /* emptyTrashToSystemTrash */, this);
+
+    // Connect signals
+    connect(&dialog, &TrashReviewDialog::statusMessage, this, [this](const QString& message) {
+        m_statusText->append(message);
+    });
+
+    connect(&dialog, &TrashReviewDialog::filesRestored, this, [this](int count) {
+        m_statusText->append(QString("Restored %1 file(s) from trash").arg(count));
+    });
+
+    connect(&dialog, &TrashReviewDialog::trashEmptied, this, [this]() {
+        m_statusText->append("Trash emptied");
+    });
+
+    dialog.exec();
+}
+
+void MainWindow::onPdfMakerClicked()
+{
+    // Open PDF Maker dialog
+    PdfMakerDialog dialog(m_config.outputDirectory, this);
+
+    // Connect signals
+    connect(&dialog, &PdfMakerDialog::statusMessage, this, [this](const QString& message) {
+        m_statusText->append(message);
+    });
+
+    connect(&dialog, &PdfMakerDialog::filesDeleted, this, [this](int count) {
+        m_statusText->append(QString("Deleted %1 file(s)").arg(count));
+    });
+
+    dialog.exec();
 }
 

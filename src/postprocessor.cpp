@@ -1,21 +1,36 @@
 #include "postprocessor.h"
 #include "trashmanager.h"
+#include "mlclassifier.h"
 #include <QDir>
 #include <QFileInfo>
+#include <QDebug>
 
 PostProcessor::PostProcessor(QObject *parent)
     : QObject(parent), m_totalProcessed(0)
 {
 }
 
-int PostProcessor::processDirectory(const QString& imageDir,
-                                    bool deleteRedundant,
-                                    bool compareExcluded,
-                                    int hammingThreshold,
-                                    const QList<ExclusionEntry>& exclusionList)
+PostProcessingResult PostProcessor::processDirectory(const QString& imageDir,
+                                                    bool deleteRedundant,
+                                                    bool compareExcluded,
+                                                    int hammingThreshold,
+                                                    const QList<ExclusionEntry>& exclusionList,
+                                                    bool enableMLClassification,
+                                                    const QString& mlModelPath,
+                                                    float mlNotSlideHighThreshold,
+                                                    float mlNotSlideLowThreshold,
+                                                    float mlMaybeSlideHighThreshold,
+                                                    float mlMaybeSlideLowThreshold,
+                                                    float mlSlideMaxThreshold,
+                                                    bool mlDeleteMaybeSlides,
+                                                    const QString& mlExecutionProvider,
+                                                    bool useApplicationTrash,
+                                                    const QString& baseOutputDir)
 {
     m_movedToTrash.clear();
     m_totalProcessed = 0;
+
+    PostProcessingResult result;
 
     // Get list of image files
     QDir dir(imageDir);
@@ -25,7 +40,7 @@ int PostProcessor::processDirectory(const QString& imageDir,
 
     if (imageFiles.isEmpty()) {
         emit processingComplete(0, 0);
-        return 0;
+        return result;
     }
 
     // Convert to absolute paths
@@ -41,8 +56,10 @@ int PostProcessor::processDirectory(const QString& imageDir,
 
     // Remove duplicates if enabled
     if (deleteRedundant) {
-        QStringList duplicates = removeDuplicates(imageHashes, hammingThreshold);
+        QStringList duplicates = removeDuplicates(imageHashes, hammingThreshold,
+                                                  useApplicationTrash, baseOutputDir);
         m_movedToTrash.append(duplicates);
+        result.removedByPHash += duplicates.size();
 
         // Remove moved files from hash map
         for (const QString& file : duplicates) {
@@ -52,12 +69,35 @@ int PostProcessor::processDirectory(const QString& imageDir,
 
     // Remove excluded images if enabled
     if (compareExcluded && !exclusionList.isEmpty()) {
-        QStringList excluded = removeExcluded(imageHashes, exclusionList, hammingThreshold);
+        QStringList excluded = removeExcluded(imageHashes, exclusionList, hammingThreshold,
+                                              useApplicationTrash, baseOutputDir);
         m_movedToTrash.append(excluded);
+        result.removedByPHash += excluded.size();
+
+        // Remove moved files from hash map
+        for (const QString& file : excluded) {
+            imageHashes.remove(file);
+        }
     }
 
-    emit processingComplete(m_totalProcessed, m_movedToTrash.size());
-    return m_movedToTrash.size();
+    // ML classification if enabled
+    if (enableMLClassification && MLClassifier::isAvailable()) {
+        QStringList mlRemoved = classifyAndRemove(imageHashes, mlModelPath,
+                                                  mlNotSlideHighThreshold,
+                                                  mlNotSlideLowThreshold,
+                                                  mlMaybeSlideHighThreshold,
+                                                  mlMaybeSlideLowThreshold,
+                                                  mlSlideMaxThreshold,
+                                                  mlDeleteMaybeSlides,
+                                                  mlExecutionProvider, useApplicationTrash, baseOutputDir);
+        m_movedToTrash.append(mlRemoved);
+        result.removedByML = mlRemoved.size();
+    }
+
+    result.totalRemoved = m_movedToTrash.size();
+
+    emit processingComplete(m_totalProcessed, result.totalRemoved);
+    return result;
 }
 
 QMap<QString, std::vector<uint8_t>> PostProcessor::calculateHashes(const QStringList& imageFiles)
@@ -78,7 +118,9 @@ QMap<QString, std::vector<uint8_t>> PostProcessor::calculateHashes(const QString
 }
 
 QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint8_t>>& imageHashes,
-                                           int hammingThreshold)
+                                           int hammingThreshold,
+                                           bool useApplicationTrash,
+                                           const QString& baseOutputDir)
 {
     QStringList movedFiles;
     QStringList processedFiles = imageHashes.keys();
@@ -108,8 +150,16 @@ QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint
             int distance = PHashCalculator::hammingDistance(hash1, hash2);
 
             if (distance >= 0 && distance <= hammingThreshold) {
-                // Images are similar - move the later one to trash
-                if (TrashManager::moveToTrash(file2)) {
+                // Images are similar - move to trash
+                bool success = false;
+                if (useApplicationTrash) {
+                    success = TrashManager::moveToApplicationTrash(file2, baseOutputDir, "phash",
+                                                                   QString("Duplicate (distance: %1)").arg(distance));
+                } else {
+                    success = TrashManager::renameAndMoveToTrash(file2, "slideRemoved_phash_");
+                }
+
+                if (success) {
                     movedFiles.append(file2);
                     emit imageMovedToTrash(file2, QString("Duplicate (distance: %1)").arg(distance));
                 }
@@ -122,7 +172,9 @@ QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint
 
 QStringList PostProcessor::removeExcluded(const QMap<QString, std::vector<uint8_t>>& imageHashes,
                                          const QList<ExclusionEntry>& exclusionList,
-                                         int hammingThreshold)
+                                         int hammingThreshold,
+                                         bool useApplicationTrash,
+                                         const QString& baseOutputDir)
 {
     QStringList movedFiles;
 
@@ -140,15 +192,125 @@ QStringList PostProcessor::removeExcluded(const QMap<QString, std::vector<uint8_
 
             if (distance >= 0 && distance <= hammingThreshold) {
                 // Image matches exclusion list - move to trash
-                if (TrashManager::moveToTrash(filePath)) {
+                bool success = false;
+                QString reason = QString("Excluded: %1 (distance: %2)").arg(entry.remark).arg(distance);
+
+                if (useApplicationTrash) {
+                    success = TrashManager::moveToApplicationTrash(filePath, baseOutputDir, "phash", reason);
+                } else {
+                    success = TrashManager::renameAndMoveToTrash(filePath, "slideRemoved_phash_");
+                }
+
+                if (success) {
                     movedFiles.append(filePath);
-                    emit imageMovedToTrash(filePath,
-                        QString("Excluded: %1 (distance: %2)").arg(entry.remark).arg(distance));
+                    emit imageMovedToTrash(filePath, reason);
                 }
                 break;  // No need to check other exclusion entries
             }
         }
     }
+
+    return movedFiles;
+}
+
+QStringList PostProcessor::classifyAndRemove(const QMap<QString, std::vector<uint8_t>>& imageHashes,
+                                            const QString& mlModelPath,
+                                            float mlNotSlideHighThreshold,
+                                            float mlNotSlideLowThreshold,
+                                            float mlMaybeSlideHighThreshold,
+                                            float mlMaybeSlideLowThreshold,
+                                            float mlSlideMaxThreshold,
+                                            bool mlDeleteMaybeSlides,
+                                            const QString& mlExecutionProvider,
+                                            bool useApplicationTrash,
+                                            const QString& baseOutputDir)
+{
+    QStringList movedFiles;
+
+    if (!MLClassifier::isAvailable()) {
+        qWarning() << "PostProcessor: ML classification requested but ONNX Runtime not available";
+        return movedFiles;
+    }
+
+    if (mlModelPath.isEmpty()) {
+        qWarning() << "PostProcessor: ML model path is empty";
+        return movedFiles;
+    }
+
+    // Convert execution provider string to enum
+    MLClassifier::ExecutionProvider provider = MLClassifier::stringToExecutionProvider(mlExecutionProvider);
+
+    // Initialize ML classifier
+    MLClassifier classifier(mlModelPath, provider);
+
+    if (!classifier.isInitialized()) {
+        QString errorMsg = classifier.getErrorMessage();
+        qWarning() << "PostProcessor: Failed to initialize ML classifier:" << errorMsg;
+        emit mlClassificationFailed(errorMsg);
+        return movedFiles;
+    }
+
+    QString activeProvider = classifier.getActiveExecutionProvider();
+    qInfo() << "PostProcessor: ML classification using" << activeProvider;
+
+    // Emit signal with execution provider info
+    emit mlClassificationStarted(activeProvider);
+
+    // Get list of remaining images (after pHash post-processing)
+    QStringList imagePaths = imageHashes.keys();
+
+    if (imagePaths.isEmpty()) {
+        return movedFiles;
+    }
+
+    // Classify all images
+    QVector<ClassificationResult> results = classifier.classifyBatch(imagePaths);
+
+    // Process results and remove unwanted images
+    for (const ClassificationResult& result : results) {
+        if (result.error) {
+            qWarning() << "PostProcessor: Classification error for" << result.imagePath
+                      << ":" << result.errorMessage;
+            continue;
+        }
+
+        // Determine if image should be kept using 2-stage logic
+        MLClassifier::CategoryThresholds notSlideThresholds(mlNotSlideHighThreshold, mlNotSlideLowThreshold);
+        MLClassifier::CategoryThresholds maybeSlideThresholds(mlMaybeSlideHighThreshold, mlMaybeSlideLowThreshold);
+
+        bool shouldKeep = MLClassifier::shouldKeepImage(result, notSlideThresholds,
+                                                        maybeSlideThresholds, mlSlideMaxThreshold,
+                                                        mlDeleteMaybeSlides);
+
+        if (!shouldKeep) {
+            // Move to trash
+            bool success = false;
+            QString reason = QString("ML: %1 (confidence: %2)")
+                                .arg(result.predictedClass)
+                                .arg(result.confidence, 0, 'f', 3);
+
+            if (useApplicationTrash) {
+                success = TrashManager::moveToApplicationTrash(result.imagePath, baseOutputDir, "ml", reason);
+            } else {
+                success = TrashManager::renameAndMoveToTrash(result.imagePath, "slideRemoved_ml_");
+            }
+
+            if (success) {
+                movedFiles.append(result.imagePath);
+                emit imageMovedToTrash(result.imagePath,
+                    QString("ML: %1 (confidence: %2)")
+                        .arg(result.predictedClass)
+                        .arg(result.confidence, 0, 'f', 3));
+
+                qInfo() << "PostProcessor: Removed" << QFileInfo(result.imagePath).fileName()
+                       << "- classified as" << result.predictedClass
+                       << "with confidence" << result.confidence;
+            }
+        }
+    }
+
+    qInfo() << "PostProcessor: ML classification complete -" << movedFiles.size()
+           << "images removed out of" << imagePaths.size();
 
     return movedFiles;
 }

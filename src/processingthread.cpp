@@ -204,7 +204,7 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         QString hwMethod = QString::fromStdString(tempDecoder.getHardwareAccelerationMethod());
 
         // Log video information immediately
-        QString infoLog = QString("Video Info - Resolution: %1x%2, Duration: %3s, Frame Rate: %4fps, I-Frame Interval: %5s, Screen Recording: %6, Decoder: %7 [Memory-Limited Mode]")
+        QString infoLog = QString("Video Info - Resolution: %1x%2, Duration: %3s, Frame Rate: %4fps, I-Frame Interval: %5s, Screen Recording: %6, Decoder: %7")
                          .arg(videoInfo.width)
                          .arg(videoInfo.height)
                          .arg(videoInfo.duration, 0, 'f', 1)
@@ -587,7 +587,7 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
                         // Save the OpenCV Mat as JPEG using Unicode-safe helper
                         std::vector<int> compression_params;
                         compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
-                        compression_params.push_back(95); // High quality
+                        compression_params.push_back(m_config.jpegQuality);
 
                         if (!ImageIOHelper::imwriteUnicode(filePath, selectedFrames[i], compression_params)) {
                             QString errorMsg = QString("Failed to save slide: %1").arg(filePath);

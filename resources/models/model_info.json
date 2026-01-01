@@ -1,0 +1,52 @@
+{
+  "class_names": [
+    "may_be_slide",
+    "not_slide",
+    "slide"
+  ],
+  "num_classes": 3,
+  "input_shape": [
+    1,
+    3,
+    256,
+    256
+  ],
+  "input_size": [
+    256,
+    256
+  ],
+  "normalization": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "model_architecture": "mobilenetv4_conv_medium.e500_r256_in1k",
+  "quantization": "none",
+  "training_info": {
+    "best_val_acc": 99.27483683828862,
+    "epoch": 4,
+    "config": {
+      "data_dir": "dataset",
+      "batch_size": 64,
+      "num_epochs": 50,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "early_stopping_patience": 10,
+      "save_dir": "models",
+      "model_name": "slide_classifier_mobilenetv4_opencv.pth",
+      "resume_from": null,
+      "force_fresh": false,
+      "num_workers": 4,
+      "pin_memory": true,
+      "fast_mode": false,
+      "preprocessing": "opencv_inter_area"
+    }
+  }
+}

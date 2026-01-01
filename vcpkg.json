@@ -1,6 +1,6 @@
 {
   "name": "autoslides-extractor",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "AutoSlides Extractor - Extract slides from video presentations using advanced image processing",
   "homepage": "https://github.com/bit-admin/AutoSlidesQt",
   "dependencies": [

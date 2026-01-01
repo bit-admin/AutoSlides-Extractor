@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 1.0.1 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 1.1.0 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -191,7 +191,7 @@ if(Vulkan_FOUND)
 endif()
 
 # Find required packages
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
 
 # Find PkgConfig (optional on Windows, required on Unix)
 if(WIN32)
@@ -209,6 +209,157 @@ if(OpenCV_FOUND)
     message(STATUS "OpenCV libraries: ${OpenCV_LIBS}")
 else()
     message(FATAL_ERROR "OpenCV not found. Please install OpenCV or set OpenCV_DIR")
+endif()
+
+# Find ONNX Runtime (optional for ML classification)
+# Priority: 1. Vendor binaries (with Core ML/CUDA/DirectML), 2. System installation, 3. Manual search
+set(ONNX_DEFINITIONS "")
+set(ONNX_LIBRARIES "")
+set(ONNX_INCLUDE_DIRS "")
+set(ONNX_FOUND FALSE)
+
+# Step 1: Check vendor directory first (platform-specific with hardware acceleration)
+message(STATUS "Searching for ONNX Runtime with hardware acceleration support...")
+
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+    set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-osx-arm64-1.23.2")
+    set(VENDOR_ONNX_LIB_NAME "libonnxruntime.1.23.2.dylib")
+    set(VENDOR_ONNX_PROVIDER "Core ML")
+elseif(APPLE)
+    set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-osx-x86_64-1.23.2")
+    set(VENDOR_ONNX_LIB_NAME "libonnxruntime.1.23.2.dylib")
+    set(VENDOR_ONNX_PROVIDER "Core ML")
+elseif(WIN32)
+    # Prefer GPU version (DirectML + CUDA) if available
+    if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-1.23.2")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-1.23.2")
+        set(VENDOR_ONNX_LIB_NAME "onnxruntime.lib")
+        set(VENDOR_ONNX_PROVIDER "DirectML + CUDA")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-1.23.2")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-1.23.2")
+        set(VENDOR_ONNX_LIB_NAME "onnxruntime.lib")
+        set(VENDOR_ONNX_PROVIDER "DirectML")
+    endif()
+elseif(UNIX)
+    # Linux - check for CUDA version
+    if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-gpu-1.23.2")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-gpu-1.23.2")
+        set(VENDOR_ONNX_LIB_NAME "libonnxruntime.so.1.23.2")
+        set(VENDOR_ONNX_PROVIDER "CUDA")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-1.23.2")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-1.23.2")
+        set(VENDOR_ONNX_LIB_NAME "libonnxruntime.so.1.23.2")
+        set(VENDOR_ONNX_PROVIDER "CPU")
+    endif()
+endif()
+
+# Check if vendor ONNX Runtime exists
+if(VENDOR_ONNX_PATH AND EXISTS "${VENDOR_ONNX_PATH}")
+    set(VENDOR_ONNX_INCLUDE "${VENDOR_ONNX_PATH}/include")
+    set(VENDOR_ONNX_LIB "${VENDOR_ONNX_PATH}/lib/${VENDOR_ONNX_LIB_NAME}")
+
+    if(EXISTS "${VENDOR_ONNX_INCLUDE}" AND EXISTS "${VENDOR_ONNX_LIB}")
+        set(ONNX_FOUND TRUE)
+        set(ONNX_DEFINITIONS "-DONNX_AVAILABLE")
+        set(ONNX_INCLUDE_DIRS "${VENDOR_ONNX_INCLUDE}")
+        set(ONNX_LIBRARIES "${VENDOR_ONNX_LIB}")
+        message(STATUS "✓ Using vendor ONNX Runtime with ${VENDOR_ONNX_PROVIDER} support")
+        message(STATUS "  Path: ${VENDOR_ONNX_PATH}")
+        message(STATUS "  Include: ${ONNX_INCLUDE_DIRS}")
+        message(STATUS "  Library: ${ONNX_LIBRARIES}")
+    endif()
+endif()
+
+# Step 2: Try find_package if vendor not found
+if(NOT ONNX_FOUND)
+    find_package(onnxruntime QUIET)
+    if(onnxruntime_FOUND)
+        set(ONNX_FOUND TRUE)
+        set(ONNX_DEFINITIONS "-DONNX_AVAILABLE")
+        set(ONNX_LIBRARIES onnxruntime::onnxruntime)
+        message(STATUS "ONNX Runtime found via find_package - ML classification enabled")
+        message(STATUS "ONNX Runtime version: ${onnxruntime_VERSION}")
+        message(STATUS "Note: System ONNX Runtime may not include hardware acceleration (Core ML/CUDA/DirectML)")
+    endif()
+endif()
+
+# Step 3: Try manual search in common locations if still not found
+if(NOT ONNX_FOUND)
+    message(STATUS "ONNX Runtime not found via find_package, trying manual search...")
+
+    set(ONNX_SEARCH_PATHS
+        /usr/local/include
+        /opt/homebrew/include
+        /opt/homebrew/Cellar/onnxruntime/*/include
+        /usr/include
+        /opt/local/include
+        C:/onnxruntime/include
+        C:/vcpkg/installed/x64-windows/include
+        ${CMAKE_PREFIX_PATH}/include
+    )
+
+    set(ONNX_LIB_SEARCH_PATHS
+        /usr/local/lib
+        /opt/homebrew/lib
+        /opt/homebrew/Cellar/onnxruntime/*/lib
+        /usr/lib
+        /opt/local/lib
+        C:/onnxruntime/lib
+        C:/vcpkg/installed/x64-windows/lib
+        ${CMAKE_PREFIX_PATH}/lib
+    )
+
+    find_path(ONNX_INCLUDE_DIR onnxruntime/onnxruntime_cxx_api.h
+        PATHS ${ONNX_SEARCH_PATHS}
+        NO_DEFAULT_PATH
+    )
+
+    # If found, adjust to parent directory
+    if(ONNX_INCLUDE_DIR)
+        get_filename_component(ONNX_INCLUDE_DIR "${ONNX_INCLUDE_DIR}" ABSOLUTE)
+    endif()
+
+    if(WIN32)
+        find_library(ONNX_LIBRARY
+            NAMES onnxruntime libonnxruntime onnxruntime.dll
+            PATHS ${ONNX_LIB_SEARCH_PATHS}
+            NO_DEFAULT_PATH
+        )
+    else()
+        find_library(ONNX_LIBRARY
+            NAMES onnxruntime libonnxruntime.dylib libonnxruntime.so
+            PATHS ${ONNX_LIB_SEARCH_PATHS}
+            NO_DEFAULT_PATH
+        )
+    endif()
+
+    if(ONNX_INCLUDE_DIR AND ONNX_LIBRARY)
+        set(ONNX_FOUND TRUE)
+        set(ONNX_DEFINITIONS "-DONNX_AVAILABLE")
+        set(ONNX_LIBRARIES ${ONNX_LIBRARY})
+        set(ONNX_INCLUDE_DIRS ${ONNX_INCLUDE_DIR})
+        message(STATUS "ONNX Runtime found via manual search - ML classification enabled")
+        message(STATUS "  Include: ${ONNX_INCLUDE_DIR}")
+        message(STATUS "  Library: ${ONNX_LIBRARY}")
+        message(STATUS "Note: System ONNX Runtime may not include hardware acceleration (Core ML/CUDA/DirectML)")
+    endif()
+endif()
+
+# Step 4: Report if not found
+if(NOT ONNX_FOUND)
+    message(STATUS "ONNX Runtime not found - ML classification will be disabled")
+    message(STATUS "To enable ML classification with hardware acceleration:")
+    message(STATUS "  1. Download pre-built binaries from:")
+    message(STATUS "     https://github.com/microsoft/onnxruntime/releases/tag/v1.23.2")
+    message(STATUS "  2. Extract to vendor/ directory:")
+    message(STATUS "     - macOS ARM64: vendor/onnxruntime-osx-arm64-1.23.2/")
+    message(STATUS "     - Windows: vendor/onnxruntime-win-x64-gpu-1.23.2/")
+    message(STATUS "  3. Rebuild with CMake")
+    message(STATUS "")
+    message(STATUS "Alternative (without hardware acceleration):")
+    message(STATUS "  macOS:   brew install onnxruntime")
+    message(STATUS "  Windows: vcpkg install onnxruntime")
+    message(STATUS "  Linux:   Build from source or use package manager")
 endif()
 
 # Find FFmpeg libraries using standard CMake approach
@@ -320,6 +471,8 @@ set(SOURCES
     src/main.cpp
     src/mainwindow.cpp
     src/settingsdialog.cpp
+    src/rangeslider.cpp
+    src/styledslider.cpp
     src/videoprocessor.cpp
     src/hardwaredecoder.cpp
     src/ssimcalculator.cpp
@@ -335,7 +488,13 @@ set(SOURCES
     src/performancemonitor.cpp
     src/phashcalculator.cpp
     src/trashmanager.cpp
+    src/trashmetadata.cpp
+    src/trashitemwidget.cpp
+    src/trashreviewdialog.cpp
     src/postprocessor.cpp
+    src/mlclassifier.cpp
+    src/pdfmakerdialog.cpp
+    src/slideitemwidget.cpp
 )
 
 # Add Windows resource file for icon
@@ -347,6 +506,8 @@ endif()
 set(HEADERS
     src/mainwindow.h
     src/settingsdialog.h
+    src/rangeslider.h
+    src/styledslider.h
     src/videoprocessor.h
     src/hardwaredecoder.h
     src/ssimcalculator.h
@@ -361,12 +522,25 @@ set(HEADERS
     src/gpuacceleration.h
     src/performancemonitor.h
     src/phashcalculator.h
+    src/trashentry.h
     src/trashmanager.h
+    src/trashmetadata.h
+    src/trashitemwidget.h
+    src/trashreviewdialog.h
     src/postprocessor.h
+    src/mlclassifier.h
+    src/pdfmakerdialog.h
+    src/slideitemwidget.h
 )
+
+# Qt resources
+qt_add_resources(RESOURCES resources.qrc)
 
 # Create executable
 qt6_add_executable(AutoSlidesExtractor ${SOURCES} ${HEADERS})
+
+# Add resources to target
+target_sources(AutoSlidesExtractor PRIVATE ${RESOURCES})
 
 # Apply compiler flags and definitions
 if(SIMD_FLAGS)
@@ -383,13 +557,23 @@ if(GPU_DEFINITIONS)
     target_compile_definitions(AutoSlidesExtractor PRIVATE ${GPU_DEFINITIONS})
 endif()
 
+if(ONNX_DEFINITIONS)
+    target_compile_definitions(AutoSlidesExtractor PRIVATE ${ONNX_DEFINITIONS})
+endif()
+
 # Link libraries
 target_link_libraries(AutoSlidesExtractor PRIVATE
     Qt6::Core
     Qt6::Widgets
+    Qt6::Gui
     ${OpenCV_LIBS}
     ${GPU_LIBRARIES}
 )
+
+# Link ONNX Runtime if available
+if(ONNX_LIBRARIES)
+    target_link_libraries(AutoSlidesExtractor PRIVATE ${ONNX_LIBRARIES})
+endif()
 
 # Link FFmpeg libraries
 target_link_libraries(AutoSlidesExtractor PRIVATE
@@ -418,6 +602,11 @@ target_include_directories(AutoSlidesExtractor PRIVATE
     ${OpenCV_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
 )
+
+# Add ONNX Runtime include directories if available
+if(ONNX_INCLUDE_DIRS)
+    target_include_directories(AutoSlidesExtractor PRIVATE ${ONNX_INCLUDE_DIRS})
+endif()
 
 # Add GPU-specific include directories
 if(CUDAToolkit_FOUND)

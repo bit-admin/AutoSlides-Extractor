@@ -138,7 +138,7 @@ public:
      */
     int extractFramesInChunks(const ChunkReadyCallback& chunkCallback,
                             const ProgressCallback& progressCallback = nullptr,
-                            int chunkSize = 500,
+                            int chunkSize = 100,
                             double targetInterval = 2.0);
 
     /**
@@ -162,7 +162,7 @@ public:
      */
     int extractFramesInChunksOptimized(const OptimizedChunkReadyCallback& chunkCallback,
                                      const ProgressCallback& progressCallback = nullptr,
-                                     int chunkSize = 500,
+                                     int chunkSize = 100,
                                      double targetInterval = 2.0);
 
     /**

@@ -1,16 +1,19 @@
 #include "settingsdialog.h"
 #include "phashcalculator.h"
+#include "mlclassifier.h"
 #include <QApplication>
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QHeaderView>
+#include <QFileInfo>
+#include <algorithm>
 
 SettingsDialog::SettingsDialog(const AppConfig& config, ConfigManager* configManager, int initialTab, QWidget *parent)
     : QDialog(parent), m_config(config), m_originalConfig(config), m_configManager(configManager)
 {
     setWindowTitle("Settings");
     setModal(true);
-    resize(550, 600);
+    resize(550, 700);
 
     // Load exclusion list
     m_exclusionList = m_configManager->loadExclusionList();
@@ -35,13 +38,22 @@ void SettingsDialog::setupUI()
     m_mainLayout->setSpacing(8);
     m_mainLayout->setContentsMargins(12, 12, 12, 12);
 
-    // Create tab widget
-    m_tabWidget = new QTabWidget(this);
-    m_mainLayout->addWidget(m_tabWidget);
+    // Create scroll area for the entire content
+    QScrollArea* scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
+    // Create tab widget inside scroll area
+    m_tabWidget = new QTabWidget();
+    scrollArea->setWidget(m_tabWidget);
+    m_mainLayout->addWidget(scrollArea, 1);  // stretch factor 1 to take available space
 
     // Setup tabs
     setupProcessingTab();
     setupPostProcessingTab();
+    setupMLClassificationTab();
 
     // === DIALOG BUTTONS ===
     m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -72,6 +84,27 @@ void SettingsDialog::setupUI()
     // Post-processing signals
     connect(m_addFromImageButton, &QPushButton::clicked, this, &SettingsDialog::onAddFromImageClicked);
     connect(m_manualInputButton, &QPushButton::clicked, this, &SettingsDialog::onManualInputClicked);
+
+    // ML Classification signals
+#ifdef ONNX_AVAILABLE
+    connect(m_mlBrowseModelButton, &QPushButton::clicked, this, [this]() {
+        QString fileName = QFileDialog::getOpenFileName(this,
+            "Select ONNX Model File",
+            QString(),
+            "ONNX Models (*.onnx);;All Files (*)");
+
+        if (!fileName.isEmpty()) {
+            m_mlModelPathEdit->setText(fileName);
+        }
+    });
+
+    connect(m_mlUseDefaultModelButton, &QPushButton::clicked, this, [this]() {
+        m_mlModelPathEdit->clear();
+        m_mlModelPathEdit->setPlaceholderText("Using built-in model");
+    });
+
+    connect(m_mlTestButton, &QPushButton::clicked, this, &SettingsDialog::onTestMLClassificationClicked);
+#endif
 }
 
 void SettingsDialog::setupProcessingTab()
@@ -181,6 +214,28 @@ void SettingsDialog::setupProcessingTab()
     chunkLayout->addWidget(m_chunkHelpLabel, 1, 0, 1, 2);
 
     tabLayout->addWidget(m_chunkGroup);
+
+    // === OUTPUT SETTINGS ===
+    m_outputGroup = new QGroupBox("Output Settings", m_processingTab);
+    QGridLayout* outputLayout = new QGridLayout(m_outputGroup);
+    outputLayout->setContentsMargins(12, 12, 12, 12);
+    outputLayout->setSpacing(8);
+
+    QLabel* jpegQualityLabel = new QLabel("JPEG Quality:", m_processingTab);
+    m_jpegQualitySpinBox = new QSpinBox(m_processingTab);
+    m_jpegQualitySpinBox->setRange(1, 100);
+    m_jpegQualitySpinBox->setSingleStep(5);
+    m_jpegQualitySpinBox->setValue(95);
+
+    m_outputHelpLabel = new QLabel("Higher values produce better quality images but larger file sizes.", m_processingTab);
+    m_outputHelpLabel->setWordWrap(true);
+    m_outputHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
+
+    outputLayout->addWidget(jpegQualityLabel, 0, 0);
+    outputLayout->addWidget(m_jpegQualitySpinBox, 0, 1);
+    outputLayout->addWidget(m_outputHelpLabel, 1, 0, 1, 2);
+
+    tabLayout->addWidget(m_outputGroup);
     tabLayout->addStretch();
 
     m_tabWidget->addTab(m_processingTab, "Processing");
@@ -254,10 +309,127 @@ void SettingsDialog::setupPostProcessingTab()
     tabLayout->addWidget(exclusionGroup);
     tabLayout->addStretch();
 
-    m_tabWidget->addTab(m_postProcessingTab, "Post-Processing");
+    m_tabWidget->addTab(m_postProcessingTab, "Post-Processing (pHash)");
 
     // Update table
     updateExclusionTable();
+}
+
+void SettingsDialog::setupMLClassificationTab()
+{
+#ifdef ONNX_AVAILABLE
+    m_mlClassificationTab = new QWidget();
+    QVBoxLayout* tabLayout = new QVBoxLayout(m_mlClassificationTab);
+    tabLayout->setSpacing(12);
+    tabLayout->setContentsMargins(12, 12, 12, 12);
+
+    // === ML CLASSIFICATION SETTINGS ===
+    QGroupBox* mlGroup = new QGroupBox("ML Classification Settings", m_mlClassificationTab);
+    QVBoxLayout* mlLayout = new QVBoxLayout(mlGroup);
+    mlLayout->setContentsMargins(12, 12, 12, 12);
+    mlLayout->setSpacing(8);
+
+    // Model path selector
+    QHBoxLayout* modelPathLayout = new QHBoxLayout();
+    QLabel* modelPathLabel = new QLabel("Model Path:", m_mlClassificationTab);
+    m_mlModelPathEdit = new QLineEdit(m_mlClassificationTab);
+    m_mlModelPathEdit->setReadOnly(true);
+    m_mlModelPathEdit->setPlaceholderText("Using built-in model");
+
+    m_mlBrowseModelButton = new QPushButton("Browse...", m_mlClassificationTab);
+    m_mlBrowseModelButton->setFixedWidth(80);
+
+    m_mlUseDefaultModelButton = new QPushButton("Use Default", m_mlClassificationTab);
+    m_mlUseDefaultModelButton->setFixedWidth(100);
+
+    modelPathLayout->addWidget(modelPathLabel);
+    modelPathLayout->addWidget(m_mlModelPathEdit, 1);
+    modelPathLayout->addWidget(m_mlBrowseModelButton);
+    modelPathLayout->addWidget(m_mlUseDefaultModelButton);
+
+    mlLayout->addLayout(modelPathLayout);
+
+    // Threshold sliders section with clearer explanation
+    QLabel* thresholdsLabel = new QLabel("ML Prediction Thresholds", m_mlClassificationTab);
+    thresholdsLabel->setStyleSheet("font-weight: bold; margin-top: 8px;");
+    mlLayout->addWidget(thresholdsLabel);
+
+    QLabel* thresholdsHelpLabel = new QLabel(
+        "The model outputs a confidence score for each class. For 'not_slide/may_be_slide' classes: Delete zone → always removed. Check zone → removed only if their 'slide' probability falls in the Delete zone. Keep zone (low confidence) → always kept.", m_mlClassificationTab);
+    thresholdsHelpLabel->setWordWrap(true);
+    thresholdsHelpLabel->setStyleSheet("color: #666; font-size: 11px; margin-bottom: 4px;");
+    mlLayout->addWidget(thresholdsHelpLabel);
+
+    // === not_slide thresholds ===
+    QLabel* notSlideLabel = new QLabel("'not_slide' (desktop, black screen, etc.)", m_mlClassificationTab);
+    notSlideLabel->setStyleSheet("font-weight: bold; margin-top: 4px;");
+    mlLayout->addWidget(notSlideLabel);
+
+    m_mlNotSlideRangeSlider = new RangeSlider(Qt::Horizontal, m_mlClassificationTab);
+    m_mlNotSlideRangeSlider->setRange(0, 100);
+    m_mlNotSlideRangeSlider->setLowerValue(75);  // Default 0.75
+    m_mlNotSlideRangeSlider->setUpperValue(90);  // Default 0.90
+    m_mlNotSlideRangeSlider->setZoneLabels("Keep", "Check", "Delete");
+    m_mlNotSlideRangeSlider->setMinimumHeight(50);
+    mlLayout->addWidget(m_mlNotSlideRangeSlider);
+
+    // === may_be_slide thresholds ===
+    {
+        QHBoxLayout* maybeSlideLabelLayout = new QHBoxLayout();
+        QLabel* maybeSlideLabel = new QLabel("'may_be_slide' (PPT edit, side screen)", m_mlClassificationTab);
+        maybeSlideLabel->setStyleSheet("font-weight: bold;");
+        m_mlDeleteMaybeSlidesCheckBox = new QCheckBox("Delete 'may_be_slide' images", m_mlClassificationTab);
+        maybeSlideLabelLayout->addWidget(maybeSlideLabel);
+        maybeSlideLabelLayout->addStretch();
+        maybeSlideLabelLayout->addWidget(m_mlDeleteMaybeSlidesCheckBox);
+        mlLayout->addLayout(maybeSlideLabelLayout);
+    }
+
+    m_mlMaybeSlideRangeSlider = new RangeSlider(Qt::Horizontal, m_mlClassificationTab);
+    m_mlMaybeSlideRangeSlider->setRange(0, 100);
+    m_mlMaybeSlideRangeSlider->setLowerValue(75);  // Default 0.75
+    m_mlMaybeSlideRangeSlider->setUpperValue(90);  // Default 0.90
+    m_mlMaybeSlideRangeSlider->setZoneLabels("Keep", "Check", "Delete");
+    m_mlMaybeSlideRangeSlider->setMinimumHeight(50);
+    mlLayout->addWidget(m_mlMaybeSlideRangeSlider);
+
+    // === slide_max threshold (shared) ===
+    QLabel* slideMaxLabel = new QLabel("Max 'slide' probability (for Check zone)", m_mlClassificationTab);
+    slideMaxLabel->setStyleSheet("font-weight: bold; margin-top: 4px;");
+    mlLayout->addWidget(slideMaxLabel);
+
+    m_mlSlideMaxThresholdSlider = new StyledSlider(Qt::Horizontal, m_mlClassificationTab);
+    m_mlSlideMaxThresholdSlider->setRange(0, 100);
+    m_mlSlideMaxThresholdSlider->setValue(25);  // Default 0.25
+    m_mlSlideMaxThresholdSlider->setMinimumHeight(50);
+    mlLayout->addWidget(m_mlSlideMaxThresholdSlider);
+
+    tabLayout->addWidget(mlGroup);
+
+    // === ML CLASSIFICATION TEST ===
+    QGroupBox* mlTestGroup = new QGroupBox("Test ML Classification", m_mlClassificationTab);
+    QVBoxLayout* mlTestLayout = new QVBoxLayout(mlTestGroup);
+    mlTestLayout->setContentsMargins(12, 12, 12, 12);
+    mlTestLayout->setSpacing(6);
+
+    // Test button
+    m_mlTestButton = new QPushButton("Select Image to Test", m_mlClassificationTab);
+    mlTestLayout->addWidget(m_mlTestButton);
+
+    // Result text area
+    m_mlTestResultText = new QTextEdit(m_mlClassificationTab);
+    m_mlTestResultText->setReadOnly(true);
+    m_mlTestResultText->setMinimumHeight(100);
+    m_mlTestResultText->setMaximumHeight(120);
+    m_mlTestResultText->setPlaceholderText("Classification results will appear here...");
+    m_mlTestResultText->setStyleSheet("font-family: monospace; font-size: 10px;");
+    mlTestLayout->addWidget(m_mlTestResultText);
+
+    tabLayout->addWidget(mlTestGroup);
+    tabLayout->addStretch();
+
+    m_tabWidget->addTab(m_mlClassificationTab, "Post-Processing (ML)");
+#endif
 }
 
 void SettingsDialog::updateUIFromConfig()
@@ -270,6 +442,9 @@ void SettingsDialog::updateUIFromConfig()
     // Chunk size
     m_chunkSizeSpinBox->setValue(m_config.chunkSize);
 
+    // Output settings
+    m_jpegQualitySpinBox->setValue(m_config.jpegQuality);
+
     // Downsampling settings
     m_enableDownsamplingCheckBox->setChecked(m_config.enableDownsampling);
     m_downsampleWidthSpinBox->setValue(m_config.downsampleWidth);
@@ -279,6 +454,26 @@ void SettingsDialog::updateUIFromConfig()
 
     // Post-processing settings
     m_hammingThresholdSpinBox->setValue(m_config.hammingThreshold);
+
+    // ML Classification settings
+#ifdef ONNX_AVAILABLE
+    m_mlDeleteMaybeSlidesCheckBox->setChecked(m_config.mlDeleteMaybeSlides);
+
+    // Update model path
+    if (m_config.mlModelPath.startsWith(":/")) {
+        m_mlModelPathEdit->clear();
+        m_mlModelPathEdit->setPlaceholderText("Using built-in model");
+    } else {
+        m_mlModelPathEdit->setText(m_config.mlModelPath);
+    }
+
+    // Update 2-stage threshold range sliders
+    m_mlNotSlideRangeSlider->setUpperValue(static_cast<int>(m_config.mlNotSlideHighThreshold * 100));
+    m_mlNotSlideRangeSlider->setLowerValue(static_cast<int>(m_config.mlNotSlideLowThreshold * 100));
+    m_mlMaybeSlideRangeSlider->setUpperValue(static_cast<int>(m_config.mlMaybeSlideHighThreshold * 100));
+    m_mlMaybeSlideRangeSlider->setLowerValue(static_cast<int>(m_config.mlMaybeSlideLowThreshold * 100));
+    m_mlSlideMaxThresholdSlider->setValue(static_cast<int>(m_config.mlSlideMaxThreshold * 100));
+#endif
 }
 
 void SettingsDialog::updateConfigFromUI()
@@ -290,6 +485,9 @@ void SettingsDialog::updateConfigFromUI()
     // Chunk size
     m_config.chunkSize = m_chunkSizeSpinBox->value();
 
+    // Output settings
+    m_config.jpegQuality = m_jpegQualitySpinBox->value();
+
     // Downsampling settings
     m_config.enableDownsampling = m_enableDownsamplingCheckBox->isChecked();
     m_config.downsampleWidth = m_downsampleWidthSpinBox->value();
@@ -297,6 +495,25 @@ void SettingsDialog::updateConfigFromUI()
 
     // Post-processing settings
     m_config.hammingThreshold = m_hammingThresholdSpinBox->value();
+
+    // ML Classification settings
+#ifdef ONNX_AVAILABLE
+    m_config.mlDeleteMaybeSlides = m_mlDeleteMaybeSlidesCheckBox->isChecked();
+
+    // Update model path
+    if (m_mlModelPathEdit->text().isEmpty()) {
+        m_config.mlModelPath = ":/models/resources/models/slide_classifier_mobilenetv4_v1.onnx";
+    } else {
+        m_config.mlModelPath = m_mlModelPathEdit->text();
+    }
+
+    // Update 2-stage threshold values from range sliders
+    m_config.mlNotSlideHighThreshold = m_mlNotSlideRangeSlider->upperValue() / 100.0f;
+    m_config.mlNotSlideLowThreshold = m_mlNotSlideRangeSlider->lowerValue() / 100.0f;
+    m_config.mlMaybeSlideHighThreshold = m_mlMaybeSlideRangeSlider->upperValue() / 100.0f;
+    m_config.mlMaybeSlideLowThreshold = m_mlMaybeSlideRangeSlider->lowerValue() / 100.0f;
+    m_config.mlSlideMaxThreshold = m_mlSlideMaxThresholdSlider->value() / 100.0f;
+#endif
 }
 
 void SettingsDialog::updateExclusionTable()
@@ -466,6 +683,191 @@ void SettingsDialog::onDeleteExclusionClicked()
     // Handled by individual delete buttons in table
 }
 
+#ifdef ONNX_AVAILABLE
+void SettingsDialog::onTestMLClassificationClicked()
+{
+    // Select image file
+    QString imagePath = QFileDialog::getOpenFileName(this,
+        "Select Image to Test",
+        QString(),
+        "Images (*.jpg *.jpeg *.png *.bmp);;All Files (*)");
+
+    if (imagePath.isEmpty()) {
+        return;
+    }
+
+    m_mlTestResultText->clear();
+    m_mlTestResultText->append("Testing ML Classification...");
+    m_mlTestResultText->append(QString("Image: %1").arg(QFileInfo(imagePath).fileName()));
+    m_mlTestResultText->append("----------------------------------------");
+
+    // Get current model path
+    QString modelPath = m_mlModelPathEdit->text();
+    if (modelPath.isEmpty()) {
+        modelPath = ":/models/resources/models/slide_classifier_mobilenetv4_v1.onnx";
+    }
+
+    // Get current 2-stage thresholds from range sliders
+    float notSlideHighThreshold = m_mlNotSlideRangeSlider->upperValue() / 100.0f;
+    float notSlideLowThreshold = m_mlNotSlideRangeSlider->lowerValue() / 100.0f;
+    float maybeSlideHighThreshold = m_mlMaybeSlideRangeSlider->upperValue() / 100.0f;
+    float maybeSlideLowThreshold = m_mlMaybeSlideRangeSlider->lowerValue() / 100.0f;
+    float slideMaxThreshold = m_mlSlideMaxThresholdSlider->value() / 100.0f;
+
+    // Get delete maybe slides setting
+    bool deleteMaybeSlides = m_mlDeleteMaybeSlidesCheckBox->isChecked();
+
+    // Initialize classifier
+    MLClassifier classifier(modelPath, MLClassifier::ExecutionProvider::Auto);
+
+    if (!classifier.isInitialized()) {
+        m_mlTestResultText->append("ERROR: Failed to initialize ML classifier");
+        m_mlTestResultText->append(QString("Reason: %1").arg(classifier.getErrorMessage()));
+        return;
+    }
+
+    m_mlTestResultText->append(QString("Execution Provider: %1").arg(classifier.getActiveExecutionProvider()));
+    m_mlTestResultText->append("");
+
+    // Classify the image
+    ClassificationResult result = classifier.classifySingle(imagePath);
+
+    if (result.error) {
+        m_mlTestResultText->append(QString("X ERROR: %1").arg(result.errorMessage));
+        return;
+    }
+
+    // Display results
+    m_mlTestResultText->append("CLASSIFICATION RESULTS:");
+    m_mlTestResultText->append("----------------------------------------");
+    m_mlTestResultText->append(QString("Predicted Class: %1").arg(result.predictedClass));
+    m_mlTestResultText->append(QString("Confidence: %1 (%2%)")
+        .arg(result.confidence, 0, 'f', 4)
+        .arg(result.confidence * 100, 0, 'f', 2));
+    m_mlTestResultText->append("");
+
+    // Display all class probabilities (sorted by confidence)
+    m_mlTestResultText->append("ALL CLASS PROBABILITIES:");
+    m_mlTestResultText->append("----------------------------------------");
+
+    // Sort by probability (descending)
+    QList<QPair<QString, float>> sortedProbs;
+    for (auto it = result.classProbabilities.constBegin(); it != result.classProbabilities.constEnd(); ++it) {
+        sortedProbs.append(qMakePair(it.key(), it.value()));
+    }
+    std::sort(sortedProbs.begin(), sortedProbs.end(), [](const QPair<QString, float>& a, const QPair<QString, float>& b) {
+        return a.second > b.second;
+    });
+
+    for (const auto& pair : sortedProbs) {
+        QString className = pair.first;
+        float probability = pair.second;
+
+        QString indicator;
+        if (className == result.predictedClass) {
+            indicator = " <- PREDICTED";
+        } else {
+            indicator = "";
+        }
+
+        m_mlTestResultText->append(QString("  %1: %2%%3")
+            .arg(className)
+            .arg(probability * 100, 0, 'f', 2)
+            .arg(indicator));
+    }
+
+    // Get slide probability for 2-stage logic explanation
+    float slideProb = result.classProbabilities.value("slide", 0.0f);
+
+    // Decision logic using 2-stage thresholds
+    m_mlTestResultText->append("");
+    m_mlTestResultText->append("2-STAGE DECISION:");
+    m_mlTestResultText->append("----------------------------------------");
+
+    MLClassifier::CategoryThresholds notSlideThresholds(notSlideHighThreshold, notSlideLowThreshold);
+    MLClassifier::CategoryThresholds maybeSlideThresholds(maybeSlideHighThreshold, maybeSlideLowThreshold);
+
+    bool shouldKeep = MLClassifier::shouldKeepImage(result, notSlideThresholds,
+                                                    maybeSlideThresholds, slideMaxThreshold,
+                                                    deleteMaybeSlides);
+
+    if (shouldKeep) {
+        m_mlTestResultText->append("[KEEP] This image would be KEPT");
+    } else {
+        m_mlTestResultText->append("[REMOVE] This image would be MOVED TO TRASH");
+    }
+
+    // Explain the decision
+    m_mlTestResultText->append("");
+    m_mlTestResultText->append("REASON:");
+    if (result.predictedClass == "slide") {
+        m_mlTestResultText->append("  - Classified as 'slide' (always kept)");
+    } else if (result.predictedClass.startsWith("not_slide")) {
+        float conf = result.confidence;
+        if (conf >= notSlideHighThreshold) {
+            m_mlTestResultText->append(QString("  - High confidence: %1 >= %2 (high threshold)")
+                .arg(conf, 0, 'f', 4)
+                .arg(notSlideHighThreshold, 0, 'f', 2));
+            m_mlTestResultText->append("  - Removed immediately (Stage 1)");
+        } else if (conf >= notSlideLowThreshold) {
+            m_mlTestResultText->append(QString("  - Medium confidence: %1 in [%2, %3)")
+                .arg(conf, 0, 'f', 4)
+                .arg(notSlideLowThreshold, 0, 'f', 2)
+                .arg(notSlideHighThreshold, 0, 'f', 2));
+            if (slideProb <= slideMaxThreshold) {
+                m_mlTestResultText->append(QString("  - Slide prob %1 <= %2 (slide_max) -> Removed (Stage 2)")
+                    .arg(slideProb, 0, 'f', 4)
+                    .arg(slideMaxThreshold, 0, 'f', 2));
+            } else {
+                m_mlTestResultText->append(QString("  - Slide prob %1 > %2 (slide_max) -> Kept (Stage 2 failed)")
+                    .arg(slideProb, 0, 'f', 4)
+                    .arg(slideMaxThreshold, 0, 'f', 2));
+            }
+        } else {
+            m_mlTestResultText->append(QString("  - Low confidence: %1 < %2 (low threshold)")
+                .arg(conf, 0, 'f', 4)
+                .arg(notSlideLowThreshold, 0, 'f', 2));
+            m_mlTestResultText->append("  - Kept by default");
+        }
+    } else if (result.predictedClass.startsWith("may_be_slide")) {
+        if (!deleteMaybeSlides) {
+            m_mlTestResultText->append("  - 'Delete may_be_slide images' is DISABLED");
+            m_mlTestResultText->append("  - Kept regardless of confidence");
+        } else {
+            float conf = result.confidence;
+            if (conf >= maybeSlideHighThreshold) {
+                m_mlTestResultText->append(QString("  - High confidence: %1 >= %2 (high threshold)")
+                    .arg(conf, 0, 'f', 4)
+                    .arg(maybeSlideHighThreshold, 0, 'f', 2));
+                m_mlTestResultText->append("  - Removed immediately (Stage 1)");
+            } else if (conf >= maybeSlideLowThreshold) {
+                m_mlTestResultText->append(QString("  - Medium confidence: %1 in [%2, %3)")
+                    .arg(conf, 0, 'f', 4)
+                    .arg(maybeSlideLowThreshold, 0, 'f', 2)
+                    .arg(maybeSlideHighThreshold, 0, 'f', 2));
+                if (slideProb <= slideMaxThreshold) {
+                    m_mlTestResultText->append(QString("  - Slide prob %1 <= %2 (slide_max) -> Removed (Stage 2)")
+                        .arg(slideProb, 0, 'f', 4)
+                        .arg(slideMaxThreshold, 0, 'f', 2));
+                } else {
+                    m_mlTestResultText->append(QString("  - Slide prob %1 > %2 (slide_max) -> Kept (Stage 2 failed)")
+                        .arg(slideProb, 0, 'f', 4)
+                        .arg(slideMaxThreshold, 0, 'f', 2));
+                }
+            } else {
+                m_mlTestResultText->append(QString("  - Low confidence: %1 < %2 (low threshold)")
+                    .arg(conf, 0, 'f', 4)
+                    .arg(maybeSlideLowThreshold, 0, 'f', 2));
+                m_mlTestResultText->append("  - Kept by default");
+            }
+        }
+    }
+
+    m_mlTestResultText->append("");
+    m_mlTestResultText->append("Test completed successfully!");
+}
+#endif
+
 void SettingsDialog::onOkClicked()
 {
     updateConfigFromUI();
@@ -502,6 +904,8 @@ void SettingsDialog::onRestoreDefaultsClicked()
 
     m_chunkSizeSpinBox->setValue(m_config.chunkSize);
 
+    m_jpegQualitySpinBox->setValue(m_config.jpegQuality);
+
     m_enableDownsamplingCheckBox->setChecked(m_config.enableDownsampling);
     m_downsampleWidthSpinBox->setValue(m_config.downsampleWidth);
     m_downsampleHeightSpinBox->setValue(m_config.downsampleHeight);
@@ -511,6 +915,22 @@ void SettingsDialog::onRestoreDefaultsClicked()
     // Update UI to reflect defaults - Post-processing tab
     m_hammingThresholdSpinBox->setValue(m_config.hammingThreshold);
     updateExclusionTable();
+
+    // Update UI to reflect defaults - ML Classification tab
+#ifdef ONNX_AVAILABLE
+    m_mlDeleteMaybeSlidesCheckBox->setChecked(m_config.mlDeleteMaybeSlides);
+    m_mlModelPathEdit->clear();
+    m_mlModelPathEdit->setPlaceholderText("Using built-in model");
+
+    // Range sliders use 0-100 scale (values are stored as 0.0-1.0)
+    m_mlNotSlideRangeSlider->setLowerValue(static_cast<int>(m_config.mlNotSlideLowThreshold * 100));
+    m_mlNotSlideRangeSlider->setUpperValue(static_cast<int>(m_config.mlNotSlideHighThreshold * 100));
+
+    m_mlMaybeSlideRangeSlider->setLowerValue(static_cast<int>(m_config.mlMaybeSlideLowThreshold * 100));
+    m_mlMaybeSlideRangeSlider->setUpperValue(static_cast<int>(m_config.mlMaybeSlideHighThreshold * 100));
+
+    m_mlSlideMaxThresholdSlider->setValue(static_cast<int>(m_config.mlSlideMaxThreshold * 100));
+#endif
 
     // Save the defaults
     m_configManager->saveConfig(m_config);

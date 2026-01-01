@@ -16,8 +16,15 @@
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QFileDialog>
+#include <QLineEdit>
+#include <QSlider>
+#include <QScrollArea>
+#include <QMap>
+#include <QTextEdit>
 #include "configmanager.h"
 #include "postprocessor.h"
+#include "rangeslider.h"
+#include "styledslider.h"
 
 class SettingsDialog : public QDialog
 {
@@ -46,10 +53,16 @@ private slots:
     void onManualInputClicked();
     void onDeleteExclusionClicked();
 
+    // ML Classification slots
+#ifdef ONNX_AVAILABLE
+    void onTestMLClassificationClicked();
+#endif
+
 private:
     void setupUI();
     void setupProcessingTab();
     void setupPostProcessingTab();
+    void setupMLClassificationTab();
     void updateUIFromConfig();
     void updateConfigFromUI();
     void updateDownsampleDimensionsFromPreset();
@@ -79,6 +92,11 @@ private:
     QSpinBox* m_chunkSizeSpinBox;
     QLabel* m_chunkHelpLabel;
 
+    // Output Settings Group
+    QGroupBox* m_outputGroup;
+    QSpinBox* m_jpegQualitySpinBox;
+    QLabel* m_outputHelpLabel;
+
     // Downsampling Settings Group
     QGroupBox* m_downsamplingGroup;
     QCheckBox* m_enableDownsamplingCheckBox;
@@ -87,12 +105,30 @@ private:
     QSpinBox* m_downsampleHeightSpinBox;
     QLabel* m_downsamplingHelpLabel;
 
-    // Post-Processing Tab
+    // Post-Processing Tab (pHash)
     QWidget* m_postProcessingTab;
     QSpinBox* m_hammingThresholdSpinBox;
     QTableWidget* m_exclusionTable;
     QPushButton* m_addFromImageButton;
     QPushButton* m_manualInputButton;
+
+    // ML Classification Tab
+#ifdef ONNX_AVAILABLE
+    QWidget* m_mlClassificationTab;
+    QCheckBox* m_mlDeleteMaybeSlidesCheckBox;
+    QLineEdit* m_mlModelPathEdit;
+    QPushButton* m_mlBrowseModelButton;
+    QPushButton* m_mlUseDefaultModelButton;
+    QPushButton* m_mlTestButton;
+    QTextEdit* m_mlTestResultText;
+
+    // Range sliders for 2-stage thresholds
+    RangeSlider* m_mlNotSlideRangeSlider;
+    RangeSlider* m_mlMaybeSlideRangeSlider;
+
+    // Shared slide max threshold for medium confidence zone
+    StyledSlider* m_mlSlideMaxThresholdSlider;
+#endif
 
     // Dialog buttons
     QDialogButtonBox* m_buttonBox;

@@ -56,8 +56,6 @@ ui_*.h
 ui_*.hpp
 qrc_*.cpp
 
-# Qt resource and precompiled headers
-*.qrc
 
 #########################
 # Compiled objects / binaries
