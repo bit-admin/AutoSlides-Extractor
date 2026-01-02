@@ -1,7 +1,7 @@
 👉 [Chinese version for BIT user / 中文](./README_zh-CN.md)
 
 <div align="center">
-  <img src="resources/icon.png" alt="AutoSlides Extractor Logo" width="128" />
+  <img src="docs/icon.png" alt="AutoSlides Extractor Logo" width="128" />
   <h1>AutoSlides Extractor</h1>
   <p><strong>Automatically extract slide images from video presentations using advanced computer vision</strong></p>
 

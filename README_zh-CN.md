@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="resources/icon.png" alt="AutoSlides Extractor 标志" width="128" />
+  <img src="docs/icon.png" alt="AutoSlides Extractor 标志" width="128" />
   <h1>AutoSlides Extractor</h1>
   <p><strong>利用先进的计算机视觉技术自动从视频演示中提取幻灯片图像</strong></p>
 
@@ -35,7 +35,24 @@
 
 **v1.1.0 新特性**：新增基于 **MobileNetV4 ONNX 模型** 的 AI 幻灯片分类功能，可自动识别并移除由于非幻灯片内容（如桌面屏幕、黑屏）；新增 **垃圾箱审查系统**；以及用于导出幻灯片的 **PDF 制作工具**。
 
+**相关项目**
+
+| 项目仓库 | 描述 |
+|-------------------|---------------|
+| [bit-admin/Yanhekt-AutoSlides](https://github.com/bit-admin/Yanhekt-AutoSlides) | 北京理工大学延河课堂第三方客户端；自动提取幻灯片；下载课程录像 |
+| [bit-admin/slide-classifier](https://github.com/bit-admin/slide-classifier) | 基于 MobileNetV4 的机器学习模型；在 1.5 万张延河课堂幻灯片图像上训练 |
+
+
 ## ✨ 功能特性
+
+- **可配置灵敏度**：提供预设（严格、普通、宽松）和自定义 SSIM 阈值。
+- **批量处理**：支持队列管理，批量处理多个视频。
+- **内存优化**：采用分块处理机制，高效处理大型视频文件。
+- **极速处理**：处理一节课的视频快至 10 秒。
+
+<p align="center">
+  <img src="docs/fast.png" alt="fast" width="60%">
+</p>
 
 | 核心能力 | 先进技术 |
 |-------------------|---------------|
@@ -43,12 +60,6 @@
 | 🧹 **智能后处理** <br> 使用 pHash 和排除列表自动移除冗余幻灯片 | 🤖 **AI 智能分类** <br> MobileNetV4 模型过滤非幻灯片内容 |
 | 🗑️ **垃圾箱审查系统** <br> 安全地审查和恢复已移除的幻灯片，保留完整元数据 | 🧩 **高性能** <br> 多线程与 SIMD 优化 (AVX2, NEON) |
 | 📄 **PDF 制作工具** <br> 整理提取的幻灯片并导出为压缩的 PDF 文档 | 🎼 **多格式支持** <br> 支持 MP4, AVI, MOV, MKV, WMV, FLV, WebM |
-
-### 详细特性
-- **可配置灵敏度**：提供预设（严格、普通、宽松）和自定义 SSIM 阈值。
-- **批量处理**：支持队列管理，可同时处理多个视频。
-- **内存优化**：采用分块处理机制，高效处理大型视频文件。
-- **跨平台**：在 macOS, Windows 和 Linux 上拥有原生体验。
 
 ## 📥 下载与安装
 
@@ -105,6 +116,33 @@
 *   选择包含已提取幻灯片的根文件夹。
 *   选择排序方式（名称/日期）和输出质量（调整大小/压缩）。
 *   生成演示文稿的单一 PDF 文档。
+
+<table align="center" width="100%">
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/main.png" alt="图1" />
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/settings1.png" alt="图2" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/settings2.png" alt="图1" />
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/settings3.png" alt="图2" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/trash.png" alt="图1" />
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/pdf.png" alt="图2" />
+    </td>
+  </tr>
+</table>
 
 ## 🎯 工作原理
 
