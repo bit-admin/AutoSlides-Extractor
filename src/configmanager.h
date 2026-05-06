@@ -14,6 +14,33 @@ enum class SSIMPreset {
     Custom
 };
 
+enum class AutoCropMode {
+    CannyThenYolo,
+    CannyOnly,
+    YoloOnly
+};
+
+struct AutoCropConfig {
+    AutoCropMode mode = AutoCropMode::CannyThenYolo;
+
+    // Canny pipeline parameters
+    float aspectTolerance = 0.05f;     // tolerance against {16/9, 4/3}
+    float blackThreshold = 20.0f;      // 0-255: pixel value below this counts as "black border"
+    float maxBorderFrac = 0.10f;       // max fraction of width/height to strip as black border
+    int   cannyLowThreshold = 20;
+    int   cannyHighThreshold = 60;
+    float areaRatioMin = 0.08f;        // min contour-bounding-box area ratio against inner area
+    float areaRatioMax = 0.95f;
+    float marginFrac = 0.02f;          // require non-zero top OR bottom margin >= this fraction
+    float fillRatioMin = 0.85f;        // contour-area / bounding-box-area lower bound
+
+    // YOLO pipeline parameters
+    float yoloConfidenceThreshold = 0.25f;
+    float yoloIouThreshold = 0.45f;
+    int   yoloInputSize = 640;
+    QString yoloModelPath = ":/models/resources/models/slide_detector_yolov8_v1.onnx";
+};
+
 // Forward declaration
 struct ExclusionEntry;
 
@@ -54,6 +81,9 @@ struct AppConfig {
 
     // Shared threshold for slide class in medium confidence zone
     float mlSlideMaxThreshold;       // Delete if slide probability <= this (default: 0.25)
+
+    // Auto-crop settings (Slides Review viewer auto crop)
+    AutoCropConfig autoCrop;
 
     // Default values
     AppConfig() :
@@ -169,6 +199,13 @@ private:
     static const QString KEY_ML_MAYBE_SLIDE_HIGH_THRESHOLD;
     static const QString KEY_ML_MAYBE_SLIDE_LOW_THRESHOLD;
     static const QString KEY_ML_SLIDE_MAX_THRESHOLD;
+
+    // Auto-crop keys (only the user-configurable parameters; the rest stay
+    // at compiled-in defaults from AutoCropConfig{}).
+    static const QString KEY_AUTOCROP_MODE;
+    static const QString KEY_AUTOCROP_ASPECT_TOLERANCE;
+    static const QString KEY_AUTOCROP_YOLO_CONFIDENCE;
+    static const QString KEY_AUTOCROP_YOLO_MODEL_PATH;
 };
 
 #endif // CONFIGMANAGER_H

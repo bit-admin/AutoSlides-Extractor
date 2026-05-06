@@ -128,6 +128,7 @@ bool TrashManager::decodeTrashFilename(const QString& trashedFilename,
 bool TrashManager::moveToApplicationTrash(const QString& filePath,
                                          const QString& baseOutputDir,
                                          const QString& method,
+                                         const QString& category,
                                          const QString& reason)
 {
     if (!QFile::exists(filePath)) {
@@ -167,7 +168,8 @@ bool TrashManager::moveToApplicationTrash(const QString& filePath,
     }
 
     // Create metadata entry
-    TrashEntry entry(encodedFilename, originalFolder, videoName, slideIndex, method, reason);
+    TrashEntry entry(encodedFilename, originalFolder, videoName, slideIndex,
+                     method, category, reason);
 
     // Add to metadata
     if (!TrashMetadata::addEntry(trashDir, entry)) {
@@ -276,6 +278,42 @@ int TrashManager::emptyApplicationTrash(const QString& baseOutputDir, bool moveT
     }
 
     qInfo() << "TrashManager: Emptied application trash:" << successCount << "files";
+    return successCount;
+}
+
+int TrashManager::emptyApplicationTrashForFolder(const QString& baseOutputDir,
+                                                 const QString& folderName,
+                                                 bool moveToSystemTrash)
+{
+    QString trashDir = getTrashDirectory(baseOutputDir);
+    QList<TrashEntry> entries = TrashMetadata::getEntries(trashDir);
+
+    int successCount = 0;
+
+    for (const TrashEntry& entry : entries) {
+        const QString matchA = entry.originalFolder;
+        const QString matchB = QString("slides_%1").arg(entry.videoName);
+        if (matchA != folderName && matchB != folderName) {
+            continue;
+        }
+
+        QString trashedPath = entry.getTrashedPath(baseOutputDir);
+
+        if (QFile::exists(trashedPath)) {
+            bool ok = moveToSystemTrash ? moveToTrash(trashedPath)
+                                         : QFile::remove(trashedPath);
+            if (ok) {
+                successCount++;
+            } else {
+                qWarning() << "TrashManager: Failed to remove file:" << trashedPath;
+                continue;
+            }
+        }
+
+        TrashMetadata::removeEntry(trashDir, entry.trashedFilename);
+    }
+
+    qInfo() << "TrashManager: Emptied trash for folder" << folderName << ":" << successCount << "files";
     return successCount;
 }
 

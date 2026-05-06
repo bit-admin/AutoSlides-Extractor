@@ -154,6 +154,7 @@ QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint
                 bool success = false;
                 if (useApplicationTrash) {
                     success = TrashManager::moveToApplicationTrash(file2, baseOutputDir, "phash",
+                                                                   "phash_duplicate",
                                                                    QString("Duplicate (distance: %1)").arg(distance));
                 } else {
                     success = TrashManager::renameAndMoveToTrash(file2, "slideRemoved_phash_");
@@ -196,7 +197,8 @@ QStringList PostProcessor::removeExcluded(const QMap<QString, std::vector<uint8_
                 QString reason = QString("Excluded: %1 (distance: %2)").arg(entry.remark).arg(distance);
 
                 if (useApplicationTrash) {
-                    success = TrashManager::moveToApplicationTrash(filePath, baseOutputDir, "phash", reason);
+                    success = TrashManager::moveToApplicationTrash(filePath, baseOutputDir, "phash",
+                                                                   "phash_excluded", reason);
                 } else {
                     success = TrashManager::renameAndMoveToTrash(filePath, "slideRemoved_phash_");
                 }
@@ -289,8 +291,16 @@ QStringList PostProcessor::classifyAndRemove(const QMap<QString, std::vector<uin
                                 .arg(result.predictedClass)
                                 .arg(result.confidence, 0, 'f', 3);
 
+            QString category;
+            if (result.predictedClass.startsWith("not_slide")) {
+                category = "ml_not_slide";
+            } else if (result.predictedClass.startsWith("may_be_slide")) {
+                category = "ml_maybe_slide";
+            }
+
             if (useApplicationTrash) {
-                success = TrashManager::moveToApplicationTrash(result.imagePath, baseOutputDir, "ml", reason);
+                success = TrashManager::moveToApplicationTrash(result.imagePath, baseOutputDir, "ml",
+                                                              category, reason);
             } else {
                 success = TrashManager::renameAndMoveToTrash(result.imagePath, "slideRemoved_ml_");
             }

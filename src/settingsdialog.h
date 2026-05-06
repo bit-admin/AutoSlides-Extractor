@@ -26,6 +26,9 @@
 #include "rangeslider.h"
 #include "styledslider.h"
 
+class QPlainTextEdit;
+class AutoCropTestPreviewWidget;
+
 class SettingsDialog : public QDialog
 {
     Q_OBJECT
@@ -58,16 +61,27 @@ private slots:
     void onTestMLClassificationClicked();
 #endif
 
+    // CLI tab slots
+    void onInstallCLIClicked();
+    void onUninstallCLIClicked();
+    void onCopyExampleClicked();
+    void onCopyPathLineClicked();
+    void onRefreshCliStatus();
+
 private:
     void setupUI();
     void setupProcessingTab();
     void setupPostProcessingTab();
     void setupMLClassificationTab();
+    void setupAutoCropTab();
+    void setupCLITab();
     void updateUIFromConfig();
     void updateConfigFromUI();
     void updateDownsampleDimensionsFromPreset();
     void updateDownsamplePresetFromDimensions();
     void updateExclusionTable();
+    AutoCropConfig currentAutoCropTestConfig(AutoCropMode forcedMode) const;
+    void runAutoCropTest(AutoCropMode forcedMode);
 
     AppConfig m_config;
     AppConfig m_originalConfig;
@@ -129,6 +143,30 @@ private:
     // Shared slide max threshold for medium confidence zone
     StyledSlider* m_mlSlideMaxThresholdSlider;
 #endif
+
+    // Auto Crop Tab
+    QWidget* m_autoCropTab = nullptr;
+    QComboBox* m_autoCropModeCombo = nullptr;
+    QDoubleSpinBox* m_autoCropAspectToleranceSpin = nullptr;
+    QDoubleSpinBox* m_autoCropYoloConfSpin = nullptr;
+    QLineEdit* m_autoCropYoloModelPathEdit = nullptr;
+    QPushButton* m_autoCropYoloBrowseButton = nullptr;
+    QPushButton* m_autoCropYoloUseDefaultButton = nullptr;
+    QLabel* m_autoCropModelInfoLabel = nullptr;
+    QPushButton* m_autoCropTestCannyButton = nullptr;
+    QPushButton* m_autoCropTestYoloButton = nullptr;
+    QLabel* m_autoCropTestResultLabel = nullptr;
+    AutoCropTestPreviewWidget* m_autoCropTestPreview = nullptr;
+
+    // CLI Tab
+    QWidget* m_cliTab = nullptr;
+    QLabel* m_cliStatusLabel = nullptr;
+    QLabel* m_cliPathHintLabel = nullptr;
+    QPushButton* m_cliCopyPathLineButton = nullptr;
+    QPushButton* m_cliInstallButton = nullptr;
+    QPushButton* m_cliUninstallButton = nullptr;
+    QPlainTextEdit* m_cliExampleText = nullptr;
+    QPushButton* m_cliCopyExampleButton = nullptr;
 
     // Dialog buttons
     QDialogButtonBox* m_buttonBox;

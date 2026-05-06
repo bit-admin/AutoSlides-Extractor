@@ -48,13 +48,16 @@ public:
      * @brief Move a file to application trash (.extractorTrash/)
      * @param filePath Path to the file to move
      * @param baseOutputDir Base output directory (e.g., ~/Downloads/SlidesExtractor)
-     * @param method Removal method ("phash" or "ml")
-     * @param reason Reason for removal (e.g., "Duplicate (distance: 5)")
+     * @param method Removal method ("phash", "ml", or "manual") — drives the trash filename prefix
+     * @param category Stable category key — one of "phash_duplicate", "phash_excluded",
+     *                 "ml_not_slide", "ml_maybe_slide", "manual"
+     * @param reason Free-form human-readable detail (e.g., "Duplicate (distance: 5)")
      * @return true if successful, false otherwise
      */
     static bool moveToApplicationTrash(const QString& filePath,
                                       const QString& baseOutputDir,
                                       const QString& method,
+                                      const QString& category,
                                       const QString& reason);
 
     /**
@@ -73,6 +76,17 @@ public:
      * @return Number of files successfully removed
      */
     static int emptyApplicationTrash(const QString& baseOutputDir, bool moveToSystemTrash);
+
+    /**
+     * @brief Empty trash for a single folder (matches `entry.originalFolder` or `slides_<videoName>`)
+     * @param baseOutputDir Base output directory
+     * @param folderName Folder name to scope to (e.g., "slides_Lecture01")
+     * @param moveToSystemTrash If true, move to system trash; if false, delete permanently
+     * @return Number of files successfully removed
+     */
+    static int emptyApplicationTrashForFolder(const QString& baseOutputDir,
+                                              const QString& folderName,
+                                              bool moveToSystemTrash);
 
     /**
      * @brief Get the number of items in application trash

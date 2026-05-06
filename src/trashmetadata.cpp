@@ -48,7 +48,7 @@ bool TrashMetadata::load(const QString& trashDir, QList<TrashEntry>& entries)
     QJsonObject root = doc.object();
     QString version = root.value("version").toString("1.0");
 
-    if (version != "1.0") {
+    if (version != "1.0" && version != "1.1") {
         qWarning() << "TrashMetadata: Unsupported version:" << version;
         return false;
     }
@@ -87,7 +87,7 @@ bool TrashMetadata::save(const QString& trashDir, const QList<TrashEntry>& entri
 
     // Build JSON document
     QJsonObject root;
-    root["version"] = "1.0";
+    root["version"] = "1.1";
 
     QJsonArray entriesArray;
     for (const TrashEntry& entry : entries) {
@@ -196,6 +196,7 @@ QJsonObject TrashMetadata::entryToJson(const TrashEntry& entry)
     json["videoName"] = entry.videoName;
     json["slideIndex"] = entry.slideIndex;
     json["method"] = entry.method;
+    json["category"] = entry.category;
     json["reason"] = entry.reason;
     json["timestamp"] = entry.timestamp.toString(Qt::ISODate);
     return json;
@@ -210,6 +211,24 @@ TrashEntry TrashMetadata::jsonToEntry(const QJsonObject& json)
     entry.slideIndex = json.value("slideIndex").toString();
     entry.method = json.value("method").toString();
     entry.reason = json.value("reason").toString();
+    entry.category = json.value("category").toString();
+    if (entry.category.isEmpty()) {
+        entry.category = deriveLegacyCategory(entry.method, entry.reason);
+    }
     entry.timestamp = QDateTime::fromString(json.value("timestamp").toString(), Qt::ISODate);
     return entry;
+}
+
+QString TrashMetadata::deriveLegacyCategory(const QString& method, const QString& reason)
+{
+    if (method == "phash") {
+        if (reason.startsWith("Duplicate")) return "phash_duplicate";
+        if (reason.startsWith("Excluded"))  return "phash_excluded";
+    } else if (method == "ml") {
+        if (reason.startsWith("ML: not_slide"))    return "ml_not_slide";
+        if (reason.startsWith("ML: may_be_slide")) return "ml_maybe_slide";
+    } else if (method == "manual") {
+        return "manual";
+    }
+    return QString();
 }

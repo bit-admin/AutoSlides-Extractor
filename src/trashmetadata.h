@@ -97,6 +97,14 @@ private:
      * @return TrashEntry (may be invalid if JSON is malformed)
      */
     static TrashEntry jsonToEntry(const QJsonObject& json);
+
+    /**
+     * @brief Derive a category key for legacy entries that pre-date schema 1.1
+     *
+     * Schema 1.1 stores `category` explicitly; only entries loaded from a 1.0
+     * file (or otherwise missing the field) need string-pattern derivation.
+     */
+    static QString deriveLegacyCategory(const QString& method, const QString& reason);
 };
 
 #endif // TRASHMETADATA_H

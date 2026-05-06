@@ -18,8 +18,9 @@ struct TrashEntry {
     QString originalFolder;       // e.g., "slides_Lecture01"
     QString videoName;            // e.g., "Lecture01"
     QString slideIndex;           // e.g., "001"
-    QString method;               // "phash" or "ml"
-    QString reason;               // e.g., "Duplicate (distance: 5)"
+    QString method;               // "phash", "ml", or "manual" — drives the trash filename prefix
+    QString reason;               // e.g., "Duplicate (distance: 5)" — free-form human-readable detail
+    QString category;             // stable category key, e.g., "phash_duplicate" (schema 1.1+)
     QDateTime timestamp;          // When the file was trashed
 
     /**
@@ -36,6 +37,7 @@ struct TrashEntry {
                const QString& videoName,
                const QString& slideIndex,
                const QString& method,
+               const QString& category,
                const QString& reason,
                const QDateTime& timestamp = QDateTime::currentDateTime())
         : trashedFilename(trashedFilename),
@@ -44,6 +46,7 @@ struct TrashEntry {
           slideIndex(slideIndex),
           method(method),
           reason(reason),
+          category(category),
           timestamp(timestamp) {}
 
     /**
@@ -99,18 +102,21 @@ struct TrashEntry {
     }
 
     /**
-     * @brief Get method display name
-     * @return User-friendly method name ("pHash", "ML", or "Manual")
+     * @brief Get user-facing display name for the removal category
+     *
+     * Recognized category keys: "phash_duplicate", "phash_excluded",
+     * "ml_not_slide", "ml_maybe_slide", "manual". For legacy entries
+     * loaded from schema 1.0 metadata, TrashMetadata::jsonToEntry
+     * derives the category before this is read, so callers don't
+     * normally see an empty string here.
      */
-    QString getMethodDisplayName() const {
-        if (method == "phash") {
-            return "pHash";
-        } else if (method == "ml") {
-            return "ML";
-        } else if (method == "manual") {
-            return "Manual";
-        }
-        return method;
+    QString getCategoryDisplayName() const {
+        if (category == "phash_duplicate") return "pHash - Duplicate";
+        if (category == "phash_excluded")  return "pHash - Excluded";
+        if (category == "ml_not_slide")    return "ML - Not Slide";
+        if (category == "ml_maybe_slide")  return "ML - May Be Slide";
+        if (category == "manual")          return "Manual";
+        return category.isEmpty() ? method : category;
     }
 };
 

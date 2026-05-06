@@ -9,9 +9,7 @@
 
 enum class ProcessingStatus {
     Queued,
-    FFmpegHandling,
-    SSIMCalculating,
-    ImageProcessing,
+    Processing,
     Completed,
     Error
 };

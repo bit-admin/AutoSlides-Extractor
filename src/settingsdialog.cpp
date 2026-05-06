@@ -1,19 +1,215 @@
 #include "settingsdialog.h"
 #include "phashcalculator.h"
 #include "mlclassifier.h"
+#include "cliinstaller.h"
+#include "autocropdetector.h"
 #include <QApplication>
+#include <QDir>
 #include <QInputDialog>
-#include <QMessageBox>
 #include <QHeaderView>
 #include <QFileInfo>
+#include <QPlainTextEdit>
+#include <QFontDatabase>
+#include <QClipboard>
+#include <QDesktopServices>
+#include <QGuiApplication>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QPixmap>
+#include <QUrl>
 #include <algorithm>
+#include <cmath>
+#include <functional>
+
+static QString autoCropBackendName(AutoCropResult::Backend backend)
+{
+    switch (backend) {
+        case AutoCropResult::Backend::Canny: return "Canny";
+        case AutoCropResult::Backend::Yolo: return "YOLO";
+        case AutoCropResult::Backend::None:
+        default: return "None";
+    }
+}
+
+class AutoCropTestPreviewWidget : public QWidget
+{
+public:
+    explicit AutoCropTestPreviewWidget(QWidget* parent = nullptr)
+        : QWidget(parent)
+    {
+        setMinimumHeight(220);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setAutoFillBackground(true);
+        QPalette pal = palette();
+        pal.setColor(QPalette::Window, QColor(30, 30, 30));
+        setPalette(pal);
+    }
+
+    void setOpenHandler(std::function<void(const QString&)> handler)
+    {
+        m_openHandler = std::move(handler);
+    }
+
+    void setPreview(const QPixmap& pixmap, const QString& imagePath, const QRect& bbox, bool showCross)
+    {
+        m_pixmap = pixmap;
+        m_imagePath = imagePath;
+        m_annotatedPath.clear();
+        m_bbox = bbox;
+        m_showCross = showCross;
+        setCursor(!m_pixmap.isNull() && !m_imagePath.isEmpty() ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        Q_UNUSED(event);
+
+        QPainter painter(this);
+        painter.fillRect(rect(), palette().window());
+
+        if (m_pixmap.isNull()) {
+            painter.setPen(QColor(180, 180, 180));
+            painter.drawText(rect(), Qt::AlignCenter, "No image selected");
+            return;
+        }
+
+        const QRect display = imageDisplayRect();
+        painter.drawPixmap(display, m_pixmap);
+
+        if (!m_showCross && m_bbox.isValid() && m_bbox.width() > 0 && m_bbox.height() > 0) {
+            const QRect box = imageRectToWidgetRect(m_bbox).intersected(display);
+            if (box.isValid() && box.width() > 0 && box.height() > 0) {
+                drawOverlay(painter, box);
+            }
+            return;
+        }
+
+        drawOverlay(painter, display);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton
+            && !m_pixmap.isNull()
+            && !m_imagePath.isEmpty()
+            && imageDisplayRect().contains(event->pos())
+            && m_openHandler) {
+            const QString path = annotatedPreviewPath();
+            m_openHandler(saveAnnotatedPreview(path) ? path : QString());
+            return;
+        }
+
+        QWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    void drawOverlay(QPainter& painter, const QRect& targetRect) const
+    {
+        const int penWidth = std::max(3, std::min(targetRect.width(), targetRect.height()) / 160);
+        QPen redPen(QColor(220, 0, 0));
+        redPen.setWidth(penWidth);
+        painter.setPen(redPen);
+
+        if (!m_showCross && m_bbox.isValid() && m_bbox.width() > 0 && m_bbox.height() > 0) {
+            painter.drawRect(targetRect.adjusted(penWidth / 2,
+                                                 penWidth / 2,
+                                                 -penWidth / 2,
+                                                 -penWidth / 2));
+            return;
+        }
+
+        painter.drawLine(targetRect.topLeft(), targetRect.bottomRight());
+        painter.drawLine(targetRect.topRight(), targetRect.bottomLeft());
+    }
+
+    QString annotatedPreviewPath()
+    {
+        if (!m_annotatedPath.isEmpty()) {
+            return m_annotatedPath;
+        }
+
+        m_annotatedPath = QDir(QDir::tempPath() + "/AutoSlidesExtractor")
+            .filePath("autocrop_test_preview.png");
+        return m_annotatedPath;
+    }
+
+    bool saveAnnotatedPreview(const QString& outPath) const
+    {
+        if (m_pixmap.isNull()) {
+            return false;
+        }
+
+        QImage annotated = m_pixmap.toImage().convertToFormat(QImage::Format_ARGB32);
+        if (annotated.isNull()) {
+            return false;
+        }
+
+        QPainter painter(&annotated);
+        const QRect overlayRect = (!m_showCross && m_bbox.isValid() && m_bbox.width() > 0 && m_bbox.height() > 0)
+            ? m_bbox.intersected(annotated.rect())
+            : annotated.rect();
+        if (overlayRect.isValid() && overlayRect.width() > 0 && overlayRect.height() > 0) {
+            drawOverlay(painter, overlayRect);
+        }
+        painter.end();
+
+        QDir tempDir(QDir::tempPath() + "/AutoSlidesExtractor");
+        if (!tempDir.exists() && !tempDir.mkpath(".")) {
+            return false;
+        }
+
+        return annotated.save(outPath, "PNG");
+    }
+
+    QRect imageDisplayRect() const
+    {
+        if (m_pixmap.isNull()) {
+            return QRect();
+        }
+
+        const QSize scaled = m_pixmap.size().scaled(size(), Qt::KeepAspectRatio);
+        return QRect(QPoint((width() - scaled.width()) / 2,
+                            (height() - scaled.height()) / 2),
+                     scaled);
+    }
+
+    QRect imageRectToWidgetRect(const QRect& imageRect) const
+    {
+        if (m_pixmap.isNull()) {
+            return QRect();
+        }
+
+        const QRect display = imageDisplayRect();
+        if (display.isEmpty()) {
+            return QRect();
+        }
+
+        const qreal sx = static_cast<qreal>(display.width()) / m_pixmap.width();
+        const qreal sy = static_cast<qreal>(display.height()) / m_pixmap.height();
+
+        return QRect(display.x() + static_cast<int>(std::round(imageRect.x() * sx)),
+                     display.y() + static_cast<int>(std::round(imageRect.y() * sy)),
+                     static_cast<int>(std::round(imageRect.width() * sx)),
+                     static_cast<int>(std::round(imageRect.height() * sy)));
+    }
+
+    QPixmap m_pixmap;
+    QString m_imagePath;
+    QString m_annotatedPath;
+    QRect m_bbox;
+    std::function<void(const QString&)> m_openHandler;
+    bool m_showCross = false;
+};
 
 SettingsDialog::SettingsDialog(const AppConfig& config, ConfigManager* configManager, int initialTab, QWidget *parent)
     : QDialog(parent), m_config(config), m_originalConfig(config), m_configManager(configManager)
 {
     setWindowTitle("Settings");
     setModal(true);
-    resize(550, 700);
+    resize(590, 700);
 
     // Load exclusion list
     m_exclusionList = m_configManager->loadExclusionList();
@@ -54,6 +250,8 @@ void SettingsDialog::setupUI()
     setupProcessingTab();
     setupPostProcessingTab();
     setupMLClassificationTab();
+    setupAutoCropTab();
+    setupCLITab();
 
     // === DIALOG BUTTONS ===
     m_buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -105,6 +303,12 @@ void SettingsDialog::setupUI()
 
     connect(m_mlTestButton, &QPushButton::clicked, this, &SettingsDialog::onTestMLClassificationClicked);
 #endif
+
+    // CLI tab signals
+    connect(m_cliInstallButton, &QPushButton::clicked, this, &SettingsDialog::onInstallCLIClicked);
+    connect(m_cliUninstallButton, &QPushButton::clicked, this, &SettingsDialog::onUninstallCLIClicked);
+    connect(m_cliCopyExampleButton, &QPushButton::clicked, this, &SettingsDialog::onCopyExampleClicked);
+    connect(m_cliCopyPathLineButton, &QPushButton::clicked, this, &SettingsDialog::onCopyPathLineClicked);
 }
 
 void SettingsDialog::setupProcessingTab()
@@ -432,6 +636,383 @@ void SettingsDialog::setupMLClassificationTab()
 #endif
 }
 
+void SettingsDialog::setupAutoCropTab()
+{
+    m_autoCropTab = new QWidget();
+    QVBoxLayout* tabLayout = new QVBoxLayout(m_autoCropTab);
+    tabLayout->setSpacing(12);
+    tabLayout->setContentsMargins(12, 12, 12, 12);
+
+    // === DETECTION MODE ===
+    QGroupBox* modeGroup = new QGroupBox("Detection Mode", m_autoCropTab);
+    QGridLayout* modeLayout = new QGridLayout(modeGroup);
+    modeLayout->setContentsMargins(12, 12, 12, 12);
+    modeLayout->setSpacing(8);
+
+    QLabel* modeLabel = new QLabel("Mode:", m_autoCropTab);
+    m_autoCropModeCombo = new QComboBox(m_autoCropTab);
+    m_autoCropModeCombo->addItem("Canny then YOLO", static_cast<int>(AutoCropMode::CannyThenYolo));
+    m_autoCropModeCombo->addItem("Canny only", static_cast<int>(AutoCropMode::CannyOnly));
+    m_autoCropModeCombo->addItem("YOLO only", static_cast<int>(AutoCropMode::YoloOnly));
+
+    QLabel* yoloDescLabel = new QLabel(
+        "Use YOLO model to detect slide areas automatically. AI can make mistakes.",
+        m_autoCropTab);
+    yoloDescLabel->setWordWrap(true);
+    yoloDescLabel->setStyleSheet("color: #666; font-size: 11px;");
+
+    m_autoCropModelInfoLabel = new QLabel(m_autoCropTab);
+    m_autoCropModelInfoLabel->setWordWrap(true);
+    m_autoCropModelInfoLabel->setStyleSheet("color: #888; font-size: 10px; font-style: italic;");
+
+    QLabel* yoloReleaseLabel = new QLabel(
+        "You can download the latest model from: "
+        "<a href=\"https://github.com/bit-admin/slide-crop/releases\">GitHub Release</a>",
+        m_autoCropTab);
+    yoloReleaseLabel->setWordWrap(true);
+    yoloReleaseLabel->setOpenExternalLinks(true);
+    yoloReleaseLabel->setStyleSheet("color: #555; font-size: 11px;");
+
+    modeLayout->addWidget(modeLabel, 0, 0);
+    modeLayout->addWidget(m_autoCropModeCombo, 0, 1);
+    modeLayout->addWidget(yoloDescLabel, 1, 0, 1, 2);
+    modeLayout->addWidget(yoloReleaseLabel, 2, 0, 1, 2);
+    modeLayout->addWidget(m_autoCropModelInfoLabel, 3, 0, 1, 2);
+
+    tabLayout->addWidget(modeGroup);
+
+    // === CANNY ===
+    QGroupBox* cannyGroup = new QGroupBox("Canny Edge Detection", m_autoCropTab);
+    QGridLayout* cannyLayout = new QGridLayout(cannyGroup);
+    cannyLayout->setContentsMargins(12, 12, 12, 12);
+    cannyLayout->setSpacing(8);
+
+    QLabel* aspectLabel = new QLabel("Aspect Tolerance:", m_autoCropTab);
+    m_autoCropAspectToleranceSpin = new QDoubleSpinBox(m_autoCropTab);
+    m_autoCropAspectToleranceSpin->setRange(0.00, 0.50);
+    m_autoCropAspectToleranceSpin->setDecimals(2);
+    m_autoCropAspectToleranceSpin->setSingleStep(0.01);
+
+    QLabel* cannyHelpLabel = new QLabel(
+        "How much a candidate's aspect ratio may differ from 16:9 or 4:3 (relative). "
+        "Higher values accept more rectangle shapes.",
+        m_autoCropTab);
+    cannyHelpLabel->setWordWrap(true);
+    cannyHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
+
+    cannyLayout->addWidget(aspectLabel, 0, 0);
+    cannyLayout->addWidget(m_autoCropAspectToleranceSpin, 0, 1);
+    cannyLayout->addWidget(cannyHelpLabel, 1, 0, 1, 2);
+
+    tabLayout->addWidget(cannyGroup);
+
+    // === YOLO ===
+    QGroupBox* yoloGroup = new QGroupBox("YOLO Detector", m_autoCropTab);
+    QGridLayout* yoloLayout = new QGridLayout(yoloGroup);
+    yoloLayout->setContentsMargins(12, 12, 12, 12);
+    yoloLayout->setSpacing(8);
+
+    QLabel* yoloConfLabel = new QLabel("Confidence Threshold:", m_autoCropTab);
+    m_autoCropYoloConfSpin = new QDoubleSpinBox(m_autoCropTab);
+    m_autoCropYoloConfSpin->setRange(0.0, 1.0);
+    m_autoCropYoloConfSpin->setDecimals(2);
+    m_autoCropYoloConfSpin->setSingleStep(0.05);
+
+    QLabel* yoloPathLabel = new QLabel("Model Path:", m_autoCropTab);
+    QHBoxLayout* yoloPathLayout = new QHBoxLayout();
+    m_autoCropYoloModelPathEdit = new QLineEdit(m_autoCropTab);
+    m_autoCropYoloModelPathEdit->setReadOnly(true);
+    m_autoCropYoloModelPathEdit->setPlaceholderText("Using built-in model");
+    m_autoCropYoloBrowseButton = new QPushButton("Browse...", m_autoCropTab);
+    m_autoCropYoloBrowseButton->setFixedWidth(80);
+    m_autoCropYoloUseDefaultButton = new QPushButton("Use Default", m_autoCropTab);
+    m_autoCropYoloUseDefaultButton->setFixedWidth(100);
+    yoloPathLayout->addWidget(yoloPathLabel);
+    yoloPathLayout->addWidget(m_autoCropYoloModelPathEdit, 1);
+    yoloPathLayout->addWidget(m_autoCropYoloBrowseButton);
+    yoloPathLayout->addWidget(m_autoCropYoloUseDefaultButton);
+
+    QLabel* yoloHelpLabel = new QLabel(
+        "Lower confidence detects more candidate boxes (and more false positives).",
+        m_autoCropTab);
+    yoloHelpLabel->setWordWrap(true);
+    yoloHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
+
+    yoloLayout->addLayout(yoloPathLayout, 0, 0, 1, 2);
+
+    yoloLayout->addWidget(yoloConfLabel, 1, 0);
+    yoloLayout->addWidget(m_autoCropYoloConfSpin, 1, 1);
+    yoloLayout->addWidget(yoloHelpLabel, 2, 0, 1, 2);
+
+    tabLayout->addWidget(yoloGroup);
+
+    // === TEST AUTO CROP ===
+    QGroupBox* autoCropTestGroup = new QGroupBox("Test Auto Crop", m_autoCropTab);
+    QVBoxLayout* autoCropTestLayout = new QVBoxLayout(autoCropTestGroup);
+    autoCropTestLayout->setContentsMargins(12, 12, 12, 12);
+    autoCropTestLayout->setSpacing(8);
+
+    QHBoxLayout* autoCropTestButtonLayout = new QHBoxLayout();
+    autoCropTestButtonLayout->setSpacing(8);
+    m_autoCropTestCannyButton = new QPushButton("Test Canny...", m_autoCropTab);
+    m_autoCropTestYoloButton = new QPushButton("Test YOLO...", m_autoCropTab);
+    autoCropTestButtonLayout->addWidget(m_autoCropTestCannyButton, 1);
+    autoCropTestButtonLayout->addWidget(m_autoCropTestYoloButton, 1);
+
+    m_autoCropTestResultLabel = new QLabel("Select an image to preview the detected slide area.", m_autoCropTab);
+    m_autoCropTestResultLabel->setWordWrap(true);
+    m_autoCropTestResultLabel->setStyleSheet("color: #666; font-size: 11px;");
+
+    m_autoCropTestPreview = new AutoCropTestPreviewWidget(m_autoCropTab);
+    m_autoCropTestPreview->setToolTip("Click preview to open the annotated image in the default viewer.");
+    m_autoCropTestPreview->setOpenHandler([this](const QString& annotatedPath) {
+        if (annotatedPath.isEmpty()) {
+            emit statusMessage("Failed to create annotated preview image.");
+        } else if (QDesktopServices::openUrl(QUrl::fromLocalFile(annotatedPath))) {
+            emit statusMessage("Opened annotated preview image in the default viewer.");
+        } else {
+            emit statusMessage("Failed to open annotated preview image in the default viewer.");
+        }
+    });
+
+    autoCropTestLayout->addLayout(autoCropTestButtonLayout);
+    autoCropTestLayout->addWidget(m_autoCropTestResultLabel);
+    autoCropTestLayout->addWidget(m_autoCropTestPreview, 1);
+
+#ifndef ONNX_AVAILABLE
+    m_autoCropTestYoloButton->setEnabled(false);
+    m_autoCropTestYoloButton->setToolTip("YOLO test unavailable: ONNX Runtime not built.");
+    m_autoCropTestResultLabel->setText("Select an image to test Canny. YOLO test unavailable: ONNX Runtime not built.");
+#endif
+
+    tabLayout->addWidget(autoCropTestGroup);
+    tabLayout->addStretch();
+
+    connect(m_autoCropYoloBrowseButton, &QPushButton::clicked, this, [this]() {
+        QString fileName = QFileDialog::getOpenFileName(this,
+            "Select YOLO ONNX Model File",
+            QString(),
+            "ONNX Models (*.onnx);;All Files (*)");
+        if (!fileName.isEmpty()) {
+            m_autoCropYoloModelPathEdit->setText(fileName);
+            QFileInfo fi(fileName);
+            m_autoCropModelInfoLabel->setText(QString("Currently using: Custom - %1").arg(fi.fileName()));
+        }
+    });
+    connect(m_autoCropYoloUseDefaultButton, &QPushButton::clicked, this, [this]() {
+        m_autoCropYoloModelPathEdit->clear();
+        m_autoCropYoloModelPathEdit->setPlaceholderText("Using built-in model");
+        m_autoCropModelInfoLabel->setText("Currently using: Built-in - YOLOv8 (slide_detector_yolov8_v1.onnx)");
+    });
+    connect(m_autoCropTestCannyButton, &QPushButton::clicked, this, [this]() {
+        runAutoCropTest(AutoCropMode::CannyOnly);
+    });
+    connect(m_autoCropTestYoloButton, &QPushButton::clicked, this, [this]() {
+        runAutoCropTest(AutoCropMode::YoloOnly);
+    });
+
+    m_tabWidget->addTab(m_autoCropTab, "Auto Crop");
+}
+
+void SettingsDialog::setupCLITab()
+{
+    m_cliTab = new QWidget();
+    QVBoxLayout* tabLayout = new QVBoxLayout(m_cliTab);
+    tabLayout->setSpacing(12);
+    tabLayout->setContentsMargins(12, 12, 12, 12);
+
+    // === INSTALLATION GROUP ===
+    QGroupBox* installGroup = new QGroupBox("Command-Line Tool Installation", m_cliTab);
+    QVBoxLayout* installLayout = new QVBoxLayout(installGroup);
+    installLayout->setContentsMargins(12, 12, 12, 12);
+    installLayout->setSpacing(8);
+
+    QLabel* installHelpLabel = new QLabel(
+        "Install the 'SlidesExtractor' command so it can be used from a terminal "
+        "to run extractions without opening this app. The wrapper points at the "
+        "currently-running app — reinstall after moving the application.", m_cliTab);
+    installHelpLabel->setWordWrap(true);
+    installHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
+    installLayout->addWidget(installHelpLabel);
+
+    m_cliStatusLabel = new QLabel(m_cliTab);
+    m_cliStatusLabel->setWordWrap(true);
+    m_cliStatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    installLayout->addWidget(m_cliStatusLabel);
+
+    m_cliPathHintLabel = new QLabel(m_cliTab);
+    m_cliPathHintLabel->setWordWrap(true);
+    m_cliPathHintLabel->setStyleSheet("color: #b35c00; font-size: 11px;");
+    m_cliPathHintLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_cliPathHintLabel->setVisible(false);
+    installLayout->addWidget(m_cliPathHintLabel);
+
+    QHBoxLayout* buttonRow = new QHBoxLayout();
+    m_cliInstallButton = new QPushButton("Install CLI", m_cliTab);
+    m_cliUninstallButton = new QPushButton("Uninstall CLI", m_cliTab);
+    m_cliCopyPathLineButton = new QPushButton("Copy export line", m_cliTab);
+    m_cliCopyPathLineButton->setVisible(false);
+    buttonRow->addWidget(m_cliInstallButton);
+    buttonRow->addWidget(m_cliUninstallButton);
+    buttonRow->addWidget(m_cliCopyPathLineButton);
+    buttonRow->addStretch();
+    installLayout->addLayout(buttonRow);
+
+    tabLayout->addWidget(installGroup);
+
+    // === USAGE GROUP ===
+    QGroupBox* usageGroup = new QGroupBox("Usage Examples", m_cliTab);
+    QVBoxLayout* usageLayout = new QVBoxLayout(usageGroup);
+    usageLayout->setContentsMargins(12, 12, 12, 12);
+    usageLayout->setSpacing(8);
+
+    QLabel* usageHelpLabel = new QLabel(
+        "Only --video and --output are required. Other flags default to the values "
+        "saved in this Settings dialog. Removed slides go to the application's review-able "
+        "trash, so you can later open this app and use Slides Review.", m_cliTab);
+    usageHelpLabel->setWordWrap(true);
+    usageHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
+    usageLayout->addWidget(usageHelpLabel);
+
+    m_cliExampleText = new QPlainTextEdit(m_cliTab);
+    m_cliExampleText->setReadOnly(true);
+    m_cliExampleText->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    m_cliExampleText->setMinimumHeight(180);
+    m_cliExampleText->setPlainText(
+        "# Basic extraction (defaults from this Settings dialog)\n"
+        "SlidesExtractor --video lecture.mp4 --output ~/Slides\n"
+        "\n"
+        "# All three post-processing phases (uses the saved exclusion list from this dialog)\n"
+        "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
+        "    --phash-redundant \\\n"
+        "    --phash-exclusion \\\n"
+        "    --ml-classify\n"
+        "\n"
+        "# Phase 2 with an ad-hoc exclusion list (not saved back to GUI)\n"
+        "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
+        "    --phash-exclusion-hashes <64-char-hex>,<64-char-hex>\n"
+        "\n"
+        "# Override SSIM threshold and JPEG quality for one run\n"
+        "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
+        "    --ssim-threshold 0.999 --jpeg-quality 80");
+    usageLayout->addWidget(m_cliExampleText);
+
+    QHBoxLayout* copyRow = new QHBoxLayout();
+    copyRow->addStretch();
+    m_cliCopyExampleButton = new QPushButton("Copy Example", m_cliTab);
+    copyRow->addWidget(m_cliCopyExampleButton);
+    usageLayout->addLayout(copyRow);
+
+    tabLayout->addWidget(usageGroup);
+    tabLayout->addStretch();
+
+    m_tabWidget->addTab(m_cliTab, "CLI");
+
+    onRefreshCliStatus();
+}
+
+void SettingsDialog::onRefreshCliStatus()
+{
+    if (!m_cliStatusLabel) return;
+
+    CliInstaller::State state = CliInstaller::installState();
+    QString location = CliInstaller::installLocation();
+
+    switch (state) {
+    case CliInstaller::State::NotInstalled:
+        m_cliStatusLabel->setText(QString("<b>Status:</b> Not installed.<br><b>Will install at:</b> %1").arg(location));
+        m_cliInstallButton->setText("Install CLI");
+        m_cliInstallButton->setEnabled(true);
+        m_cliInstallButton->setVisible(true);
+        m_cliUninstallButton->setEnabled(false);
+        break;
+    case CliInstaller::State::Installed:
+        m_cliStatusLabel->setText(QString("<b>Status:</b> Installed.<br><b>Location:</b> %1").arg(location));
+        m_cliInstallButton->setText("Reinstall");
+        m_cliInstallButton->setEnabled(true);
+        m_cliInstallButton->setVisible(true);
+        m_cliUninstallButton->setEnabled(true);
+        break;
+    case CliInstaller::State::Stale:
+        m_cliStatusLabel->setText(QString(
+            "<b>Status:</b> Out of date — the installed wrapper points at a different app location.<br>"
+            "<b>Location:</b> %1<br>Click Reinstall to update it.").arg(location));
+        m_cliInstallButton->setText("Reinstall");
+        m_cliInstallButton->setEnabled(true);
+        m_cliInstallButton->setVisible(true);
+        m_cliUninstallButton->setEnabled(true);
+        break;
+    }
+
+    bool inPath = CliInstaller::isInstallDirInPath();
+    bool showHint = (state != CliInstaller::State::NotInstalled) && !inPath;
+    if (showHint) {
+        QString hintHtml = CliInstaller::pathHint().toHtmlEscaped();
+        hintHtml.replace('\n', QStringLiteral("<br>"));
+        m_cliPathHintLabel->setText("<b>Note:</b> the install directory does not appear on your PATH.<br>" +
+                                    hintHtml);
+    }
+    m_cliPathHintLabel->setVisible(showHint);
+    m_cliCopyPathLineButton->setVisible(showHint && !CliInstaller::pathExportLine().isEmpty());
+}
+
+void SettingsDialog::onCopyPathLineClicked()
+{
+    QString line = CliInstaller::pathExportLine();
+    if (line.isEmpty()) return;
+    QGuiApplication::clipboard()->setText(line);
+    emit statusMessage("Copied PATH export line to clipboard.");
+}
+
+void SettingsDialog::onInstallCLIClicked()
+{
+    QString err;
+    if (!CliInstaller::install(&err)) {
+        emit statusMessage("Install CLI failed: " + err);
+        onRefreshCliStatus();
+        return;
+    }
+
+    QString message = "Installed CLI at " + CliInstaller::installLocation() + ".";
+    if (!CliInstaller::isInstallDirInPath()) {
+        message += " " + CliInstaller::pathHint().replace('\n', ' ');
+    } else {
+#ifdef Q_OS_WIN
+        message += " Open a new terminal to use it.";
+#else
+        message += " Available in any new terminal.";
+#endif
+    }
+    emit statusMessage(message);
+    onRefreshCliStatus();
+}
+
+void SettingsDialog::onUninstallCLIClicked()
+{
+    // No confirmation dialog: project convention avoids QMessageBox (see CLAUDE.md).
+    QString err;
+    if (!CliInstaller::uninstall(&err)) {
+        emit statusMessage("Uninstall CLI failed: " + err);
+    } else {
+        emit statusMessage("Uninstalled SlidesExtractor CLI.");
+    }
+    onRefreshCliStatus();
+}
+
+void SettingsDialog::onCopyExampleClicked()
+{
+    if (!m_cliExampleText) return;
+    QString text = m_cliExampleText->textCursor().selectedText();
+    if (text.isEmpty()) {
+        text = m_cliExampleText->toPlainText();
+    } else {
+        // QTextCursor::selectedText uses U+2029 paragraph separators; normalize to '\n'
+        text.replace(QChar(0x2029), QLatin1Char('\n'));
+    }
+    QGuiApplication::clipboard()->setText(text);
+    emit statusMessage("CLI example copied to clipboard.");
+}
+
 void SettingsDialog::updateUIFromConfig()
 {
     // SSIM settings
@@ -474,6 +1055,35 @@ void SettingsDialog::updateUIFromConfig()
     m_mlMaybeSlideRangeSlider->setLowerValue(static_cast<int>(m_config.mlMaybeSlideLowThreshold * 100));
     m_mlSlideMaxThresholdSlider->setValue(static_cast<int>(m_config.mlSlideMaxThreshold * 100));
 #endif
+
+    // Auto-crop settings
+    if (m_autoCropModeCombo) {
+        const int idx = m_autoCropModeCombo->findData(static_cast<int>(m_config.autoCrop.mode));
+        m_autoCropModeCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    if (m_autoCropAspectToleranceSpin)
+        m_autoCropAspectToleranceSpin->setValue(m_config.autoCrop.aspectTolerance);
+    if (m_autoCropYoloConfSpin)
+        m_autoCropYoloConfSpin->setValue(m_config.autoCrop.yoloConfidenceThreshold);
+    if (m_autoCropYoloModelPathEdit) {
+        if (m_config.autoCrop.yoloModelPath.startsWith(":/")) {
+            m_autoCropYoloModelPathEdit->clear();
+            m_autoCropYoloModelPathEdit->setPlaceholderText("Using built-in model");
+        } else {
+            m_autoCropYoloModelPathEdit->setText(m_config.autoCrop.yoloModelPath);
+        }
+    }
+    if (m_autoCropModelInfoLabel) {
+        QString modelPath = m_config.autoCrop.yoloModelPath;
+        QString modelName;
+        if (modelPath.startsWith(":/")) {
+            modelName = "Built-in - YOLOv8 (slide_detector_yolov8_v1.onnx)";
+        } else {
+            QFileInfo fi(modelPath);
+            modelName = "Custom - " + fi.fileName();
+        }
+        m_autoCropModelInfoLabel->setText(QString("Currently using: %1").arg(modelName));
+    }
 }
 
 void SettingsDialog::updateConfigFromUI()
@@ -514,6 +1124,113 @@ void SettingsDialog::updateConfigFromUI()
     m_config.mlMaybeSlideLowThreshold = m_mlMaybeSlideRangeSlider->lowerValue() / 100.0f;
     m_config.mlSlideMaxThreshold = m_mlSlideMaxThresholdSlider->value() / 100.0f;
 #endif
+
+    // Auto-crop settings
+    if (m_autoCropModeCombo) {
+        m_config.autoCrop.mode = static_cast<AutoCropMode>(m_autoCropModeCombo->currentData().toInt());
+    }
+    if (m_autoCropAspectToleranceSpin)
+        m_config.autoCrop.aspectTolerance = static_cast<float>(m_autoCropAspectToleranceSpin->value());
+    if (m_autoCropYoloConfSpin)
+        m_config.autoCrop.yoloConfidenceThreshold = static_cast<float>(m_autoCropYoloConfSpin->value());
+    if (m_autoCropYoloModelPathEdit) {
+        const QString text = m_autoCropYoloModelPathEdit->text();
+        if (text.isEmpty()) {
+            m_config.autoCrop.yoloModelPath = ":/models/resources/models/slide_detector_yolov8_v1.onnx";
+        } else {
+            m_config.autoCrop.yoloModelPath = text;
+        }
+    }
+}
+
+AutoCropConfig SettingsDialog::currentAutoCropTestConfig(AutoCropMode forcedMode) const
+{
+    AutoCropConfig cfg = m_config.autoCrop;
+    cfg.mode = forcedMode;
+
+    if (m_autoCropAspectToleranceSpin) {
+        cfg.aspectTolerance = static_cast<float>(m_autoCropAspectToleranceSpin->value());
+    }
+    if (m_autoCropYoloConfSpin) {
+        cfg.yoloConfidenceThreshold = static_cast<float>(m_autoCropYoloConfSpin->value());
+    }
+    if (m_autoCropYoloModelPathEdit) {
+        const QString modelPath = m_autoCropYoloModelPathEdit->text();
+        cfg.yoloModelPath = modelPath.isEmpty()
+            ? QString(":/models/resources/models/slide_detector_yolov8_v1.onnx")
+            : modelPath;
+    }
+
+    return cfg;
+}
+
+void SettingsDialog::runAutoCropTest(AutoCropMode forcedMode)
+{
+    const QString backendName = (forcedMode == AutoCropMode::YoloOnly) ? "YOLO" : "Canny";
+    const QString imagePath = QFileDialog::getOpenFileName(this,
+        QString("Select Image to Test %1 Auto Crop").arg(backendName),
+        QString(),
+        "Images (*.jpg *.jpeg *.png *.bmp);;All Files (*)");
+
+    if (imagePath.isEmpty()) {
+        return;
+    }
+
+    const QFileInfo imageInfo(imagePath);
+    QPixmap previewPixmap(imagePath);
+
+    if (m_autoCropTestResultLabel) {
+        m_autoCropTestResultLabel->setText(QString("Testing %1 on %2...").arg(backendName, imageInfo.fileName()));
+    }
+    if (m_autoCropTestPreview) {
+        m_autoCropTestPreview->setPreview(previewPixmap, imagePath, QRect(), previewPixmap.isNull());
+    }
+    emit statusMessage(QString("Testing %1 auto crop...").arg(backendName));
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    AutoCropDetector detector(currentAutoCropTestConfig(forcedMode));
+    const AutoCropResult result = detector.detect(imagePath);
+    QApplication::restoreOverrideCursor();
+
+    if (previewPixmap.isNull()) {
+        if (m_autoCropTestResultLabel) {
+            m_autoCropTestResultLabel->setText(QString("%1: failed to load preview for %2.")
+                .arg(backendName, imageInfo.fileName()));
+        }
+        emit statusMessage(QString("%1 auto crop test failed to load image.").arg(backendName));
+        return;
+    }
+
+    if (result.isValid()) {
+        if (m_autoCropTestPreview) {
+            m_autoCropTestPreview->setPreview(previewPixmap, imagePath, result.bbox, false);
+        }
+        if (m_autoCropTestResultLabel) {
+            m_autoCropTestResultLabel->setText(QString("%1 | %2 | x=%3 y=%4 w=%5 h=%6 | %7 ms")
+                .arg(imageInfo.fileName(),
+                     autoCropBackendName(result.backend))
+                .arg(result.bbox.x())
+                .arg(result.bbox.y())
+                .arg(result.bbox.width())
+                .arg(result.bbox.height())
+                .arg(result.durationMs, 0, 'f', 1));
+        }
+        emit statusMessage(QString("%1 auto crop detected a slide area.").arg(autoCropBackendName(result.backend)));
+        return;
+    }
+
+    if (m_autoCropTestPreview) {
+        m_autoCropTestPreview->setPreview(previewPixmap, imagePath, QRect(), true);
+    }
+
+    const QString reason = result.errorMessage.isEmpty()
+        ? QString("No slide area detected.")
+        : result.errorMessage;
+    if (m_autoCropTestResultLabel) {
+        m_autoCropTestResultLabel->setText(QString("%1 | %2 | %3")
+            .arg(imageInfo.fileName(), backendName, reason));
+    }
+    emit statusMessage(QString("%1 auto crop did not detect a slide area.").arg(backendName));
 }
 
 void SettingsDialog::updateExclusionTable()
@@ -931,6 +1648,14 @@ void SettingsDialog::onRestoreDefaultsClicked()
 
     m_mlSlideMaxThresholdSlider->setValue(static_cast<int>(m_config.mlSlideMaxThreshold * 100));
 #endif
+
+    // Auto-crop defaults — push them through the standard updater so we
+    // don't have to mirror every slider here.
+    {
+        AppConfig defaults;
+        m_config.autoCrop = defaults.autoCrop;
+    }
+    updateUIFromConfig();
 
     // Save the defaults
     m_configManager->saveConfig(m_config);

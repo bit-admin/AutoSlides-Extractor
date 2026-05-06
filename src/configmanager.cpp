@@ -31,6 +31,29 @@ const QString ConfigManager::KEY_ML_NOT_SLIDE_LOW_THRESHOLD = "mlNotSlideLowThre
 const QString ConfigManager::KEY_ML_MAYBE_SLIDE_HIGH_THRESHOLD = "mlMaybeSlideHighThreshold";
 const QString ConfigManager::KEY_ML_MAYBE_SLIDE_LOW_THRESHOLD = "mlMaybeSlideLowThreshold";
 const QString ConfigManager::KEY_ML_SLIDE_MAX_THRESHOLD = "mlSlideMaxThreshold";
+const QString ConfigManager::KEY_AUTOCROP_MODE = "autocrop/mode";
+const QString ConfigManager::KEY_AUTOCROP_ASPECT_TOLERANCE = "autocrop/canny/aspectTolerance";
+const QString ConfigManager::KEY_AUTOCROP_YOLO_CONFIDENCE = "autocrop/yolo/confidenceThreshold";
+const QString ConfigManager::KEY_AUTOCROP_YOLO_MODEL_PATH = "autocrop/yolo/modelPath";
+
+namespace {
+QString autoCropModeToString(AutoCropMode m)
+{
+    switch (m) {
+        case AutoCropMode::CannyThenYolo: return "canny_then_yolo";
+        case AutoCropMode::CannyOnly:     return "canny_only";
+        case AutoCropMode::YoloOnly:      return "yolo_only";
+    }
+    return "canny_then_yolo";
+}
+
+AutoCropMode autoCropModeFromString(const QString& s)
+{
+    if (s == "canny_only") return AutoCropMode::CannyOnly;
+    if (s == "yolo_only")  return AutoCropMode::YoloOnly;
+    return AutoCropMode::CannyThenYolo;
+}
+}
 
 ConfigManager::ConfigManager(QObject *parent)
     : QObject(parent)
@@ -76,6 +99,13 @@ AppConfig ConfigManager::loadConfig()
     config.mlMaybeSlideLowThreshold = m_settings->value(KEY_ML_MAYBE_SLIDE_LOW_THRESHOLD, config.mlMaybeSlideLowThreshold).toFloat();
     config.mlSlideMaxThreshold = m_settings->value(KEY_ML_SLIDE_MAX_THRESHOLD, config.mlSlideMaxThreshold).toFloat();
 
+    // Load auto-crop settings (only user-configurable; remaining params keep defaults).
+    config.autoCrop.mode = autoCropModeFromString(
+        m_settings->value(KEY_AUTOCROP_MODE, autoCropModeToString(config.autoCrop.mode)).toString());
+    config.autoCrop.aspectTolerance = m_settings->value(KEY_AUTOCROP_ASPECT_TOLERANCE, config.autoCrop.aspectTolerance).toFloat();
+    config.autoCrop.yoloConfidenceThreshold = m_settings->value(KEY_AUTOCROP_YOLO_CONFIDENCE, config.autoCrop.yoloConfidenceThreshold).toFloat();
+    config.autoCrop.yoloModelPath = m_settings->value(KEY_AUTOCROP_YOLO_MODEL_PATH, config.autoCrop.yoloModelPath).toString();
+
     // Application trash settings are hardcoded:
     // - Always use application trash
     // - Always move to system trash when emptying
@@ -113,6 +143,12 @@ void ConfigManager::saveConfig(const AppConfig& config)
     m_settings->setValue(KEY_ML_MAYBE_SLIDE_HIGH_THRESHOLD, config.mlMaybeSlideHighThreshold);
     m_settings->setValue(KEY_ML_MAYBE_SLIDE_LOW_THRESHOLD, config.mlMaybeSlideLowThreshold);
     m_settings->setValue(KEY_ML_SLIDE_MAX_THRESHOLD, config.mlSlideMaxThreshold);
+
+    // Save auto-crop settings (only user-configurable params).
+    m_settings->setValue(KEY_AUTOCROP_MODE, autoCropModeToString(config.autoCrop.mode));
+    m_settings->setValue(KEY_AUTOCROP_ASPECT_TOLERANCE, config.autoCrop.aspectTolerance);
+    m_settings->setValue(KEY_AUTOCROP_YOLO_CONFIDENCE, config.autoCrop.yoloConfidenceThreshold);
+    m_settings->setValue(KEY_AUTOCROP_YOLO_MODEL_PATH, config.autoCrop.yoloModelPath);
 
     // Application trash settings are hardcoded, no need to save them
 

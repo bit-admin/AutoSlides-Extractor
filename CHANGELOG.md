@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-05-06
+
+### 🚀 Added
+
+#### Slides Review
+- **Slides Review Dialog**: Replaced the old Trash Review workflow with a unified review interface for both extracted and removed slides.
+  - Folder list now shows extracted and removed counts per slide folder.
+  - Per-folder image grid interleaves extracted slides and removed slides in slide-index order.
+  - Removed slides have category badges and red visual treatment; cropped extracted slides show a "Cropped" badge.
+  - Added per-thumbnail **View** and **Set as Baseline** actions.
+- **Full-Window Viewer**: Added a dedicated viewer page for inspecting slides from the review grid.
+  - Extracted slides support crop, auto-crop, restore crop, and recrop actions.
+  - Removed slides are shown read-only for inspection.
+- **Review Filters and Batch Actions**:
+  - Added Show filters for both/extracted/removed slides.
+  - Added reason filters for pHash duplicate, pHash excluded, ML not-slide, ML maybe-slide, and manual removals.
+  - Added selection helpers that operate only on currently visible filtered items.
+  - Added batch restore for removed slides and batch delete for extracted slides.
+  - Added folder-scoped empty-trash and delete-folder cleanup.
+
+#### Non-Destructive Cropping
+- **Crop Store**: Added `.extractorCrop/metadata.json` and original-image backups for non-destructive slide crops.
+- **Manual Crop Workflow**: Users can draw a crop rectangle in image-pixel coordinates, apply it to the live slide image, and restore the original later.
+- **Recrop Workflow**: Recropping starts from the original backup instead of the already-cropped image.
+- **Baseline Crop Workflow**: A crop from one slide can be captured as a baseline and batch-applied proportionally to other slides.
+- **Crop Cleanup**: Deleting a slide folder also cleans matching crop backups and metadata entries.
+
+#### Auto Crop
+- **Auto Crop Detector**: Added automatic slide-area detection using Canny edge detection and a YOLOv8 ONNX fallback.
+- **Built-In YOLO Model**: Bundled `slide_detector_yolov8_v1.onnx` for AI-assisted crop detection.
+- **Auto Crop Settings**: Added settings for detection mode, Canny aspect tolerance, YOLO confidence threshold, and custom YOLO model path.
+- **Auto Crop Testing**: Added Settings UI to test Canny or YOLO detection on an image and preview the detected bounding box.
+- **Batch Auto Crop**: Slides Review can auto-crop selected extracted slides and restore/crop selected removed `ml_maybe_slide` items when a slide area is detected.
+
+#### Command-Line Interface
+- **CLI Mode**: Added `--cli` execution path for running extractions without opening the main window.
+- **SlidesExtractor Wrapper**: Added Settings UI to install, reinstall, uninstall, and inspect the command-line wrapper.
+- **CLI Options**: Added command-line support for video/output paths, pHash duplicate removal, pHash exclusion matching, ML classification, threshold overrides, JPEG quality, and ad-hoc exclusion hashes.
+- **Unicode Arguments**: CLI mode uses Qt-decoded arguments so Unicode paths are preserved on Windows.
+
+#### Slides Export
+- **Batch PDF Export**: Slides Export can now create either one combined PDF or one PDF per selected folder.
+- **Aspect Ratio Control**: Added 16:9 and 4:3 PDF output controls when reducing file size.
+- **Output Folder Opening**: The Open button now opens either the generated PDF or the batch output folder.
+
+### 🛠 Changed
+
+- **Version Bump**: Updated application, CMake, Windows resource, NSIS installer, and vcpkg metadata from `1.1.0` to `1.2.0`.
+- **Review Workflow Renaming**: Renamed **Review Trash** to **Slides Review** to reflect extracted-slide inspection, restoration, deletion, and cropping.
+- **PDF Workflow Renaming**: Renamed **PDF Maker** to **Slides Export** and moved per-image inspection responsibilities to Slides Review.
+- **Slides Export Refactor**: Simplified Slides Export to a folder-only workflow with ordering, selection, resize/compression controls, and PDF generation.
+- **Processing Status**: Collapsed detailed queue states into a single `Processing` state for clearer queue behavior.
+- **Trash Metadata**: Upgraded trash metadata to schema `1.1` with explicit removal categories and backward-compatible category derivation for older entries.
+- **Status-Driven Dialog UX**: Removed QMessageBox usage from updated dialogs in favor of `statusMessage` signals.
+- **macOS Bundle Icon**: Updated bundle icon metadata to use `icon.icns` consistently.
+
+### ⚙️ Technical
+
+- **New Classes**: `AutoCropDetector`, `CropManager`, `CropMetadata`, `CropImageView`, `ReviewSlidesDialog`, `ReviewItemWidget`, `CliRunner`, and `CliInstaller`.
+- **New Metadata Types**: Added `CropEntry` for crop backups and expanded `TrashEntry` with stable category keys.
+- **Folder-Scoped Cleanup**: Added trash and crop cleanup helpers for deleting or emptying a single slide folder.
+
+---
+
 ## [1.1.0] - 2025-11-20
 
 ### 🚀 Added
@@ -76,4 +140,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Compatibility
 - **Cross-Platform**: Native builds for macOS (Apple Silicon), Windows (x64), and Linux.
 - **Formats**: Full support for MP4, MKV, AVI, MOV, WMV.
-

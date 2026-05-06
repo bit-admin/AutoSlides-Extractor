@@ -189,7 +189,7 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
 
     try {
         // Step 1: Analyze video and display info immediately
-        m_videoQueue->updateStatus(videoIndex, ProcessingStatus::FFmpegHandling);
+        m_videoQueue->updateStatus(videoIndex, ProcessingStatus::Processing);
 
         // Create a temporary decoder just to get video information quickly
         HardwareDecoder tempDecoder;
@@ -535,9 +535,6 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
                 // Update globalFrameOffset before processing
                 m_processingState.globalFrameOffset = chunk->startOffset;
 
-                // Update status for SSIM calculation
-                m_videoQueue->updateStatus(videoIndex, ProcessingStatus::SSIMCalculating);
-
                 // Get configuration parameters
                 double ssimThreshold = ConfigManager::getSSIMThreshold(m_config.ssimPreset, m_config.customSSIMThreshold);
                 int verificationCount = 3;  // Hardcoded as per PLAN.md requirements
@@ -564,8 +561,6 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
 
                 // Save any new slides detected in this chunk
                 if (!result.selectedSlideIndices.empty()) {
-                    m_videoQueue->updateStatus(videoIndex, ProcessingStatus::ImageProcessing);
-
                     // Convert global indices to local indices for frame access
                     std::vector<cv::Mat> selectedFrames;
                     for (int globalIndex : result.selectedSlideIndices) {

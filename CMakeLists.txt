@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 1.1.0 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 1.2.0 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -212,7 +212,7 @@ else()
 endif()
 
 # Find ONNX Runtime (optional for ML classification)
-# Priority: 1. Vendor binaries (with Core ML/CUDA/DirectML), 2. System installation, 3. Manual search
+# Priority: 1. Vendor binaries (with platform acceleration when available), 2. System installation, 3. Manual search
 set(ONNX_DEFINITIONS "")
 set(ONNX_LIBRARIES "")
 set(ONNX_INCLUDE_DIRS "")
@@ -230,15 +230,15 @@ elseif(APPLE)
     set(VENDOR_ONNX_LIB_NAME "libonnxruntime.1.23.2.dylib")
     set(VENDOR_ONNX_PROVIDER "Core ML")
 elseif(WIN32)
-    # Prefer GPU version (DirectML + CUDA) if available
+    # Prefer GPU version (CUDA) if available
     if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-1.23.2")
         set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-1.23.2")
         set(VENDOR_ONNX_LIB_NAME "onnxruntime.lib")
-        set(VENDOR_ONNX_PROVIDER "DirectML + CUDA")
+        set(VENDOR_ONNX_PROVIDER "CUDA")
     elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-1.23.2")
         set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-1.23.2")
         set(VENDOR_ONNX_LIB_NAME "onnxruntime.lib")
-        set(VENDOR_ONNX_PROVIDER "DirectML")
+        set(VENDOR_ONNX_PROVIDER "CPU")
     endif()
 elseif(UNIX)
     # Linux - check for CUDA version
@@ -489,12 +489,17 @@ set(SOURCES
     src/phashcalculator.cpp
     src/trashmanager.cpp
     src/trashmetadata.cpp
-    src/trashitemwidget.cpp
-    src/trashreviewdialog.cpp
+    src/cropmetadata.cpp
+    src/cropmanager.cpp
+    src/cropimageview.cpp
+    src/reviewitemwidget.cpp
+    src/reviewslidesdialog.cpp
     src/postprocessor.cpp
     src/mlclassifier.cpp
+    src/autocropdetector.cpp
     src/pdfmakerdialog.cpp
-    src/slideitemwidget.cpp
+    src/clirunner.cpp
+    src/cliinstaller.cpp
 )
 
 # Add Windows resource file for icon
@@ -525,12 +530,18 @@ set(HEADERS
     src/trashentry.h
     src/trashmanager.h
     src/trashmetadata.h
-    src/trashitemwidget.h
-    src/trashreviewdialog.h
+    src/cropentry.h
+    src/cropmetadata.h
+    src/cropmanager.h
+    src/cropimageview.h
+    src/reviewitemwidget.h
+    src/reviewslidesdialog.h
     src/postprocessor.h
     src/mlclassifier.h
+    src/autocropdetector.h
     src/pdfmakerdialog.h
-    src/slideitemwidget.h
+    src/clirunner.h
+    src/cliinstaller.h
 )
 
 # Qt resources
@@ -627,9 +638,9 @@ set_target_properties(AutoSlidesExtractor PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "AutoSlides Extractor"
     MACOSX_BUNDLE_DISPLAY_NAME "AutoSlides Extractor"
     MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
-    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.autoslides.extractor"
-    MACOSX_BUNDLE_ICON_FILE "AutoSlidesExtractor.icns"
+    MACOSX_BUNDLE_ICON_FILE "icon.icns"
     MACOSX_BUNDLE_INFO_STRING "AutoSlides Extractor - Extract slides from video presentations using advanced image processing"
     MACOSX_BUNDLE_LONG_VERSION_STRING "${PROJECT_VERSION} - Video Slide Extraction Tool"
     MACOSX_BUNDLE_COPYRIGHT "Copyright © 2025 AutoSlides Project. All rights reserved."
@@ -638,7 +649,7 @@ set_target_properties(AutoSlidesExtractor PROPERTIES
 
 # Copy icon file to app bundle on macOS
 if(APPLE)
-    set(MACOSX_BUNDLE_ICON_FILE "AutoSlidesExtractor.icns")
+    set(MACOSX_BUNDLE_ICON_FILE "icon.icns")
     set(APP_ICON_MACOSX "${CMAKE_CURRENT_SOURCE_DIR}/resources/icon.icns")
     set_source_files_properties(${APP_ICON_MACOSX} PROPERTIES
         MACOSX_PACKAGE_LOCATION "Resources")

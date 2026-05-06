@@ -1,10 +1,9 @@
 #include "mainwindow.h"
 #include "postprocessor.h"
-#include "trashreviewdialog.h"
+#include "reviewslidesdialog.h"
 #include "pdfmakerdialog.h"
 #include "trashmanager.h"
 #include <QApplication>
-#include <QMessageBox>
 #include <QHeaderView>
 #include <QTableWidgetItem>
 #include <QFileInfo>
@@ -38,7 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     updateControlButtons();
     updateQueueTable();
 
-    setWindowTitle("AutoSlides Extractor v1.1.0");
+    setWindowTitle("AutoSlides Extractor v1.2.0");
     resize(960, 720);  // Double width for left/right split
     setMinimumSize(960, 700);  // Set current size as minimum size
 }
@@ -188,20 +187,20 @@ void MainWindow::setupControlSection()
     divider->setFrameShadow(QFrame::Sunken);
     mainLayout->addWidget(divider);
 
-    // Row 2: Settings, PDF Maker, Review Trash
+    // Row 2: Settings, PDF Maker, Slides Review
     QHBoxLayout* row2Layout = new QHBoxLayout();
     row2Layout->setSpacing(8);
 
     m_settingsButton = new QPushButton("Settings", m_leftPanel);
     m_settingsButton->setToolTip("Open settings dialog");
-    m_pdfMakerButton = new QPushButton("PDF Maker", m_leftPanel);
+    m_pdfMakerButton = new QPushButton("Slides Export", m_leftPanel);
     m_pdfMakerButton->setToolTip("Browse slide folders and create PDF");
-    m_reviewTrashButton = new QPushButton("Review Trash", m_leftPanel);
-    m_reviewTrashButton->setToolTip("Review and restore slides that were moved to trash");
+    m_reviewSlidesButton = new QPushButton("Slides Review", m_leftPanel);
+    m_reviewSlidesButton->setToolTip("Review extracted and removed slides per folder");
 
     row2Layout->addWidget(m_settingsButton, 1);
     row2Layout->addWidget(m_pdfMakerButton, 1);
-    row2Layout->addWidget(m_reviewTrashButton, 1);
+    row2Layout->addWidget(m_reviewSlidesButton, 1);
 
     mainLayout->addLayout(row2Layout);
 
@@ -423,7 +422,7 @@ void MainWindow::connectSignals()
     connect(m_resetButton, &QPushButton::clicked, this, &MainWindow::onResetClicked);
     connect(m_settingsButton, &QPushButton::clicked, this, &MainWindow::onSettingsClicked);
     connect(m_pdfMakerButton, &QPushButton::clicked, this, &MainWindow::onPdfMakerClicked);
-    connect(m_reviewTrashButton, &QPushButton::clicked, this, &MainWindow::onReviewTrashClicked);
+    connect(m_reviewSlidesButton, &QPushButton::clicked, this, &MainWindow::onReviewSlidesClicked);
 
     // Processing thread signals
     connect(m_processingThread.get(), &ProcessingThread::processingStarted, this, &MainWindow::onProcessingStarted);
@@ -729,9 +728,7 @@ void MainWindow::updateControlButtons()
         VideoQueueItem* video = m_videoQueue->getVideo(currentRow);
         if (video) {
             ProcessingStatus status = video->status;
-            canRemove = (status != ProcessingStatus::FFmpegHandling &&
-                        status != ProcessingStatus::SSIMCalculating &&
-                        status != ProcessingStatus::ImageProcessing);
+            canRemove = (status != ProcessingStatus::Processing);
         }
     }
     m_removeVideoButton->setEnabled(canRemove);
@@ -813,9 +810,7 @@ void MainWindow::updateQueueTable()
                 // Use slightly darker/lighter than base depending on theme
                 rowColor = alternateColor;
                 break;
-            case ProcessingStatus::FFmpegHandling:
-            case ProcessingStatus::SSIMCalculating:
-            case ProcessingStatus::ImageProcessing:
+            case ProcessingStatus::Processing:
                 // Yellow tint - adapt to theme
                 if (palette.color(QPalette::WindowText).lightness() > 128) {
                     // Dark theme - use darker yellow
@@ -1067,21 +1062,24 @@ void MainWindow::onManualPostProcessingClicked()
         .arg(result.removedByML));
 }
 
-void MainWindow::onReviewTrashClicked()
+void MainWindow::onReviewSlidesClicked()
 {
-    // Open trash review dialog
-    TrashReviewDialog dialog(m_config.outputDirectory, true /* emptyTrashToSystemTrash */, this);
+    ReviewSlidesDialog dialog(m_config.outputDirectory, true /* emptyTrashToSystemTrash */,
+                              m_config.jpegQuality, m_config.autoCrop, this);
 
-    // Connect signals
-    connect(&dialog, &TrashReviewDialog::statusMessage, this, [this](const QString& message) {
+    connect(&dialog, &ReviewSlidesDialog::statusMessage, this, [this](const QString& message) {
         m_statusText->append(message);
     });
 
-    connect(&dialog, &TrashReviewDialog::filesRestored, this, [this](int count) {
+    connect(&dialog, &ReviewSlidesDialog::filesRestored, this, [this](int count) {
         m_statusText->append(QString("Restored %1 file(s) from trash").arg(count));
     });
 
-    connect(&dialog, &TrashReviewDialog::trashEmptied, this, [this]() {
+    connect(&dialog, &ReviewSlidesDialog::filesDeleted, this, [this](int count) {
+        m_statusText->append(QString("Deleted %1 file(s)").arg(count));
+    });
+
+    connect(&dialog, &ReviewSlidesDialog::trashEmptied, this, [this]() {
         m_statusText->append("Trash emptied");
     });
 
@@ -1090,18 +1088,11 @@ void MainWindow::onReviewTrashClicked()
 
 void MainWindow::onPdfMakerClicked()
 {
-    // Open PDF Maker dialog
     PdfMakerDialog dialog(m_config.outputDirectory, this);
 
-    // Connect signals
     connect(&dialog, &PdfMakerDialog::statusMessage, this, [this](const QString& message) {
         m_statusText->append(message);
     });
 
-    connect(&dialog, &PdfMakerDialog::filesDeleted, this, [this](int count) {
-        m_statusText->append(QString("Deleted %1 file(s)").arg(count));
-    });
-
     dialog.exec();
 }
-

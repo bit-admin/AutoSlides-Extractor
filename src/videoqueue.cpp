@@ -38,9 +38,7 @@ bool VideoQueue::removeVideo(int index)
 
     // Don't allow removal of currently processing videos
     ProcessingStatus status = m_videos[index].status;
-    if (status == ProcessingStatus::FFmpegHandling ||
-        status == ProcessingStatus::SSIMCalculating ||
-        status == ProcessingStatus::ImageProcessing) {
+    if (status == ProcessingStatus::Processing) {
         return false;
     }
 
@@ -82,7 +80,7 @@ void VideoQueue::updateStatus(int index, ProcessingStatus status)
     video.status = status;
 
     // Update timestamps
-    if (status == ProcessingStatus::FFmpegHandling && video.startTime.isNull()) {
+    if (status == ProcessingStatus::Processing && video.startTime.isNull()) {
         video.startTime = QDateTime::currentDateTime();
     } else if (status == ProcessingStatus::Completed || status == ProcessingStatus::Error) {
         video.endTime = QDateTime::currentDateTime();
@@ -163,10 +161,7 @@ int VideoQueue::getNextToProcess() const
 bool VideoQueue::isProcessing() const
 {
     for (const auto& video : m_videos) {
-        ProcessingStatus status = video.status;
-        if (status == ProcessingStatus::FFmpegHandling ||
-            status == ProcessingStatus::SSIMCalculating ||
-            status == ProcessingStatus::ImageProcessing) {
+        if (video.status == ProcessingStatus::Processing) {
             return true;
         }
     }
@@ -192,12 +187,8 @@ QString VideoQueue::getStatusString(ProcessingStatus status)
     switch (status) {
         case ProcessingStatus::Queued:
             return "Queued";
-        case ProcessingStatus::FFmpegHandling:
-            return "FFmpeg Handling";
-        case ProcessingStatus::SSIMCalculating:
-            return "SSIM Calculating";
-        case ProcessingStatus::ImageProcessing:
-            return "Image Processing";
+        case ProcessingStatus::Processing:
+            return "Processing";
         case ProcessingStatus::Completed:
             return "Completed";
         case ProcessingStatus::Error:

@@ -49,7 +49,7 @@ private slots:
     // Post-processing slots
     void onEnablePostProcessingToggled();
     void onManualPostProcessingClicked();
-    void onReviewTrashClicked();
+    void onReviewSlidesClicked();
     void onPdfMakerClicked();
 
     // Processing thread slots
@@ -122,7 +122,7 @@ private:
     QPushButton* m_resetButton;
     QPushButton* m_settingsButton;
     QPushButton* m_pdfMakerButton;
-    QPushButton* m_reviewTrashButton;
+    QPushButton* m_reviewSlidesButton;
 
     // Queue Section
     QGroupBox* m_queueGroup;
