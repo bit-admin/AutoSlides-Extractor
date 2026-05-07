@@ -8,6 +8,12 @@
 #include <QEventLoop>
 #include <QTextStream>
 #include <QRegularExpression>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QDateTime>
+#include <QMetaObject>
+#include <atomic>
+#include <csignal>
 #include <cstdio>
 
 #ifdef _WIN32
@@ -23,6 +29,14 @@ constexpr int EXIT_BAD_ARGS = 2;
 constexpr int EXIT_BAD_INPUT = 3;
 constexpr int EXIT_PROCESSING_FAILED = 4;
 constexpr int EXIT_POSTPROCESSING_FAILED = 5;
+constexpr int EXIT_CANCELLED_SIGINT = 130;
+constexpr int EXIT_CANCELLED_SIGTERM = 143;
+
+// Shared with signal handlers. Set by the OS-level signal handler; consumed
+// on the Qt thread via a posted metacall to CliRunner::requestCancel().
+std::atomic<bool> g_cancelRequested{false};
+std::atomic<int> g_cancelSignal{0}; // SIGTERM or SIGINT
+CliRunner* g_activeRunner = nullptr;
 
 bool parseBoolFlag(const QString& value, bool* out)
 {
@@ -51,7 +65,12 @@ CliRunner::CliRunner(QObject* parent)
       m_processingFinished(false),
       m_lastFramePercent(-100.0),
       m_lastPostCurrent(-1),
-      m_progressBarActive(false)
+      m_progressBarActive(false),
+      m_jsonMode(false),
+      m_postProcessingFailed(false),
+      m_postStage(QStringLiteral("phash")),
+      m_cancelHandled(false),
+      m_activeThread(nullptr)
 {
 }
 
@@ -127,24 +146,193 @@ void CliRunner::finishProgressBar()
     m_progressBarActive = false;
 }
 
+void CliRunner::emitEvent(const QString& event, QJsonObject fields, bool toStderr)
+{
+    fields.insert(QStringLiteral("v"), 1);
+    fields.insert(QStringLiteral("event"), event);
+    fields.insert(QStringLiteral("ts"),
+                  QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    const QByteArray line = QJsonDocument(fields).toJson(QJsonDocument::Compact);
+    FILE* fp = toStderr ? stderr : stdout;
+    std::fwrite(line.constData(), 1, static_cast<size_t>(line.size()), fp);
+    std::fputc('\n', fp);
+    std::fflush(fp);
+}
+
+void CliRunner::emitError(const QString& category, const QString& message, int exitCode)
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("category"), category);
+    obj.insert(QStringLiteral("message"), message);
+    obj.insert(QStringLiteral("exitCode"), exitCode);
+    emitEvent(QStringLiteral("error"), obj, /*toStderr=*/true);
+}
+
+QJsonObject CliRunner::parseVideoInfoString(const QString& raw) const
+{
+    QJsonObject obj;
+    obj.insert(QStringLiteral("kind"), QStringLiteral("video"));
+    obj.insert(QStringLiteral("message"), raw);
+
+    // Format from processingthread.cpp:207-215:
+    //   "Video Info - Resolution: WxH, Duration: Ds, Frame Rate: Rfps,
+    //    I-Frame Interval: Is, Screen Recording: Yes|No, Decoder: NAME"
+    static const QRegularExpression re(QStringLiteral(
+        "Resolution:\\s*(\\d+)x(\\d+),\\s*"
+        "Duration:\\s*([0-9.]+)s,\\s*"
+        "Frame Rate:\\s*([0-9.]+)fps,\\s*"
+        "I-Frame Interval:\\s*([0-9.]+)s,\\s*"
+        "Screen Recording:\\s*(Yes|No),\\s*"
+        "Decoder:\\s*(.+)$"));
+    const auto m = re.match(raw);
+    if (m.hasMatch()) {
+        obj.insert(QStringLiteral("videoWidth"), m.captured(1).toInt());
+        obj.insert(QStringLiteral("videoHeight"), m.captured(2).toInt());
+        obj.insert(QStringLiteral("durationSec"), m.captured(3).toDouble());
+        obj.insert(QStringLiteral("frameRate"), m.captured(4).toDouble());
+        obj.insert(QStringLiteral("iFrameIntervalSec"), m.captured(5).toDouble());
+        obj.insert(QStringLiteral("screenRecording"), m.captured(6) == QStringLiteral("Yes"));
+        obj.insert(QStringLiteral("decoder"), m.captured(7).trimmed());
+    }
+    return obj;
+}
+
+QString CliRunner::trashCategoryForReason(const QString& reason) const
+{
+    if (reason.startsWith(QStringLiteral("Duplicate"), Qt::CaseInsensitive)) {
+        return QStringLiteral("phash_duplicate");
+    }
+    if (reason.startsWith(QStringLiteral("Excluded"), Qt::CaseInsensitive)) {
+        return QStringLiteral("phash_excluded");
+    }
+    if (reason.startsWith(QStringLiteral("ML:"), Qt::CaseInsensitive)) {
+        // Extract class label: "ML: <class> (confidence: ...)"
+        const int colon = reason.indexOf(QLatin1Char(':'));
+        const int paren = reason.indexOf(QLatin1Char('('));
+        if (colon >= 0) {
+            const int end = paren > colon ? paren : reason.size();
+            const QString cls = reason.mid(colon + 1, end - colon - 1).trimmed();
+            if (cls.startsWith(QStringLiteral("not_slide"))) {
+                return QStringLiteral("ml_not_slide");
+            }
+            if (cls.startsWith(QStringLiteral("may_be_slide"))) {
+                return QStringLiteral("ml_maybe_slide");
+            }
+        }
+        return QStringLiteral("ml");
+    }
+    return QStringLiteral("other");
+}
+
+namespace {
+
+extern "C" void cli_signal_handler(int sig)
+{
+    if (g_cancelRequested.exchange(true)) {
+        // Already requested. Second hit: bail out hard.
+        std::_Exit(sig == SIGINT ? EXIT_CANCELLED_SIGINT : EXIT_CANCELLED_SIGTERM);
+    }
+    g_cancelSignal.store(sig);
+    if (g_activeRunner) {
+        QMetaObject::invokeMethod(g_activeRunner, "requestCancel", Qt::QueuedConnection);
+    }
+}
+
+#ifdef _WIN32
+BOOL WINAPI cli_console_ctrl_handler(DWORD ctrl)
+{
+    switch (ctrl) {
+        case CTRL_C_EVENT:
+        case CTRL_BREAK_EVENT:
+            cli_signal_handler(SIGINT);
+            return TRUE;
+        case CTRL_CLOSE_EVENT:
+        case CTRL_LOGOFF_EVENT:
+        case CTRL_SHUTDOWN_EVENT:
+            cli_signal_handler(SIGTERM);
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+#endif
+
+} // namespace
+
+void CliRunner::installSignalHandlers()
+{
+    g_activeRunner = this;
+    g_cancelRequested.store(false);
+    g_cancelSignal.store(0);
+    std::signal(SIGTERM, cli_signal_handler);
+    std::signal(SIGINT, cli_signal_handler);
+#ifdef _WIN32
+    SetConsoleCtrlHandler(cli_console_ctrl_handler, TRUE);
+#endif
+}
+
+void CliRunner::uninstallSignalHandlers()
+{
+    std::signal(SIGTERM, SIG_DFL);
+    std::signal(SIGINT, SIG_DFL);
+#ifdef _WIN32
+    SetConsoleCtrlHandler(cli_console_ctrl_handler, FALSE);
+#endif
+    g_activeRunner = nullptr;
+}
+
+void CliRunner::requestCancel()
+{
+    // Posted from cli_signal_handler via QMetaObject::invokeMethod.
+    if (m_activeThread) {
+        m_activeThread->stopProcessing();
+    } else {
+        // No active processing thread — terminate the event loop directly
+        // so run() can emit the cancelled event and exit.
+        QCoreApplication::quit();
+    }
+}
+
 int CliRunner::run(const QStringList& arguments)
 {
-    attachWindowsConsole();
-
     ConfigManager configManager;
     m_config = configManager.loadConfig();
 
+    // Parse args first so we know whether to operate in JSON mode. parseArgs
+    // does not write any progress output; it only emits help/version (which
+    // call std::exit) and parse errors via writeStderr/emitError.
     QString parseError;
     if (!parseArgs(arguments, &parseError)) {
         if (!parseError.isEmpty()) {
-            writeStderr(QStringLiteral("error: ") + parseError);
+            if (m_jsonMode) {
+                emitError(QStringLiteral("bad_args"), parseError, EXIT_BAD_ARGS);
+            } else {
+                writeStderr(QStringLiteral("error: ") + parseError);
+            }
         }
         return EXIT_BAD_ARGS;
     }
 
+    if (!m_jsonMode) {
+        attachWindowsConsole();
+    } else {
+        // Ensure each NDJSON line is flushed promptly to the parent's pipe,
+        // even on Windows where MSVCRT can default to full buffering.
+        std::setvbuf(stdout, nullptr, _IOLBF, 4096);
+        std::setvbuf(stderr, nullptr, _IONBF, 0);
+    }
+
+    installSignalHandlers();
+
     QFileInfo videoInfo(m_videoPath);
     if (!videoInfo.exists() || !videoInfo.isFile()) {
-        writeStderr(QStringLiteral("error: video file not found: ") + m_videoPath);
+        const QString msg = QStringLiteral("video file not found: ") + m_videoPath;
+        if (m_jsonMode) {
+            emitError(QStringLiteral("bad_input"), msg, EXIT_BAD_INPUT);
+        } else {
+            writeStderr(QStringLiteral("error: ") + msg);
+        }
+        uninstallSignalHandlers();
         return EXIT_BAD_INPUT;
     }
     m_videoPath = videoInfo.absoluteFilePath();
@@ -152,7 +340,13 @@ int CliRunner::run(const QStringList& arguments)
     QDir outDir(m_outputDir);
     if (!outDir.exists()) {
         if (!QDir().mkpath(m_outputDir)) {
-            writeStderr(QStringLiteral("error: cannot create output directory: ") + m_outputDir);
+            const QString msg = QStringLiteral("cannot create output directory: ") + m_outputDir;
+            if (m_jsonMode) {
+                emitError(QStringLiteral("bad_input"), msg, EXIT_BAD_INPUT);
+            } else {
+                writeStderr(QStringLiteral("error: ") + msg);
+            }
+            uninstallSignalHandlers();
             return EXIT_BAD_INPUT;
         }
     }
@@ -169,37 +363,74 @@ int CliRunner::run(const QStringList& arguments)
         // (when --phash-exclusion-hashes was given) are NOT persisted back to GUI config.
         m_exclusionList = configManager.loadExclusionList();
         if (m_exclusionList.isEmpty()) {
-            writeStdout(QStringLiteral("warning: --phash-exclusion enabled but the saved GUI "
-                                       "exclusion list is empty; phase 2 will be a no-op."));
+            const QString msg =
+                QStringLiteral("--phash-exclusion enabled but the saved GUI "
+                               "exclusion list is empty; phase 2 will be a no-op.");
+            if (m_jsonMode) {
+                QJsonObject obj;
+                obj.insert(QStringLiteral("kind"), QStringLiteral("warning"));
+                obj.insert(QStringLiteral("message"), msg);
+                emitEvent(QStringLiteral("info"), obj);
+            } else {
+                writeStdout(QStringLiteral("warning: ") + msg);
+            }
         }
     }
 
-    writeStdout(QStringLiteral("SlidesExtractor: starting"));
-    writeStdout(QStringLiteral("  video:  ") + m_videoPath);
-    writeStdout(QStringLiteral("  output: ") + m_outputDir);
-    writeStdout(QStringLiteral("  ssim threshold: ") +
-                QString::number(ConfigManager::getSSIMThreshold(m_config.ssimPreset, m_config.customSSIMThreshold), 'f', 4));
-    writeStdout(QStringLiteral("  phases: ") +
-                (m_phashRedundant ? QStringLiteral("phash-redundant ") : QString()) +
-                (m_phashExclusion ? QStringLiteral("phash-exclusion ") : QString()) +
-                (m_mlClassify ? QStringLiteral("ml-classify") : QString()) +
-                (!m_config.enablePostProcessing ? QStringLiteral("(none)") : QString()));
+    const double ssim = ConfigManager::getSSIMThreshold(m_config.ssimPreset, m_config.customSSIMThreshold);
+    QJsonArray phases;
+    if (m_phashRedundant) phases.append(QStringLiteral("phash-redundant"));
+    if (m_phashExclusion) phases.append(QStringLiteral("phash-exclusion"));
+    if (m_mlClassify)     phases.append(QStringLiteral("ml-classify"));
+
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("schemaVersion"), 1);
+        obj.insert(QStringLiteral("appVersion"), QCoreApplication::applicationVersion());
+        obj.insert(QStringLiteral("video"), m_videoPath);
+        obj.insert(QStringLiteral("output"), m_outputDir);
+        obj.insert(QStringLiteral("ssimThreshold"), ssim);
+        obj.insert(QStringLiteral("phases"), phases);
+        obj.insert(QStringLiteral("pid"), static_cast<qint64>(QCoreApplication::applicationPid()));
+        emitEvent(QStringLiteral("start"), obj);
+    } else {
+        writeStdout(QStringLiteral("SlidesExtractor: starting"));
+        writeStdout(QStringLiteral("  video:  ") + m_videoPath);
+        writeStdout(QStringLiteral("  output: ") + m_outputDir);
+        writeStdout(QStringLiteral("  ssim threshold: ") + QString::number(ssim, 'f', 4));
+        writeStdout(QStringLiteral("  phases: ") +
+                    (m_phashRedundant ? QStringLiteral("phash-redundant ") : QString()) +
+                    (m_phashExclusion ? QStringLiteral("phash-exclusion ") : QString()) +
+                    (m_mlClassify ? QStringLiteral("ml-classify") : QString()) +
+                    (!m_config.enablePostProcessing ? QStringLiteral("(none)") : QString()));
+    }
 
     QString slidesDir;
     int slideCount = 0;
     int processingRc = runProcessingStage(&slidesDir, &slideCount);
     if (processingRc != EXIT_OK) {
+        uninstallSignalHandlers();
         return processingRc;
     }
 
     if (m_config.enablePostProcessing) {
         int postRc = runPostProcessingStage(slidesDir);
         if (postRc != EXIT_OK) {
+            uninstallSignalHandlers();
             return postRc;
         }
     }
 
-    writeStdout(QString(QStringLiteral("done: %1 slides at %2")).arg(slideCount).arg(slidesDir));
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("slideCount"), slideCount);
+        obj.insert(QStringLiteral("slidesDir"), slidesDir);
+        obj.insert(QStringLiteral("exitCode"), EXIT_OK);
+        emitEvent(QStringLiteral("done"), obj);
+    } else {
+        writeStdout(QString(QStringLiteral("done: %1 slides at %2")).arg(slideCount).arg(slidesDir));
+    }
+    uninstallSignalHandlers();
     return EXIT_OK;
 }
 
@@ -260,6 +491,11 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     QCommandLineOption mlDelMaybeOpt(QStringLiteral("ml-delete-maybe-slides"),
         QStringLiteral("Delete may_be_slide images: true|false."), QStringLiteral("bool"));
 
+    QCommandLineOption jsonOpt(QStringLiteral("json"),
+        QStringLiteral("Emit NDJSON / JSON Lines events to stdout (and JSON errors to stderr) "
+                       "instead of human-readable text. Suppresses the progress bar. "
+                       "Designed for child_process.spawn integration (e.g. Electron)."));
+
     parser.addOption(videoOpt);
     parser.addOption(outputOpt);
     parser.addOption(ssimOpt);
@@ -281,18 +517,34 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(mlMaybeLowOpt);
     parser.addOption(mlSlideMaxOpt);
     parser.addOption(mlDelMaybeOpt);
+    parser.addOption(jsonOpt);
 
     if (!parser.parse(arguments)) {
         *errorOut = parser.errorText();
         return false;
     }
 
+    // Resolve --json before any output so help/version respect it.
+    m_jsonMode = parser.isSet(jsonOpt);
+
     if (parser.isSet(QStringLiteral("help"))) {
-        writeStdout(parser.helpText());
+        if (m_jsonMode) {
+            QJsonObject obj;
+            obj.insert(QStringLiteral("text"), parser.helpText());
+            emitEvent(QStringLiteral("help"), obj);
+        } else {
+            writeStdout(parser.helpText());
+        }
         std::exit(EXIT_OK);
     }
     if (parser.isSet(QStringLiteral("version"))) {
-        writeStdout(QCoreApplication::applicationName() + QStringLiteral(" ") + QCoreApplication::applicationVersion());
+        if (m_jsonMode) {
+            QJsonObject obj;
+            obj.insert(QStringLiteral("appVersion"), QCoreApplication::applicationVersion());
+            emitEvent(QStringLiteral("version"), obj);
+        } else {
+            writeStdout(QCoreApplication::applicationName() + QStringLiteral(" ") + QCoreApplication::applicationVersion());
+        }
         std::exit(EXIT_OK);
     }
 
@@ -434,12 +686,18 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
 {
     VideoQueue queue;
     if (queue.addVideo(m_videoPath) < 0) {
-        writeStderr(QStringLiteral("error: failed to enqueue video"));
+        const QString msg = QStringLiteral("failed to enqueue video");
+        if (m_jsonMode) {
+            emitError(QStringLiteral("processing_failed"), msg, EXIT_PROCESSING_FAILED);
+        } else {
+            writeStderr(QStringLiteral("error: ") + msg);
+        }
         return EXIT_PROCESSING_FAILED;
     }
 
     ProcessingThread thread(&queue);
     thread.updateConfig(m_config);
+    m_activeThread = &thread;
 
     m_processingFinished = false;
     m_processingResultCode = EXIT_OK;
@@ -457,7 +715,11 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
             this, &CliRunner::onFrameExtractionProgress);
     connect(&thread, &ProcessingThread::videoInfoLogged,
             this, [this](int, const QString& info) {
-                writeStdout(QStringLiteral("[info] ") + info);
+                if (m_jsonMode) {
+                    emitEvent(QStringLiteral("info"), parseVideoInfoString(info));
+                } else {
+                    writeStdout(QStringLiteral("[info] ") + info);
+                }
             });
     connect(&thread, &ProcessingThread::processingStopped, &loop, &QEventLoop::quit);
 
@@ -467,6 +729,24 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
     thread.stopProcessing();
     thread.wait();
     finishProgressBar();
+    m_activeThread = nullptr;
+
+    if (g_cancelRequested.load()) {
+        const int sig = g_cancelSignal.load();
+        const int rc = (sig == SIGINT) ? EXIT_CANCELLED_SIGINT : EXIT_CANCELLED_SIGTERM;
+        if (m_jsonMode && !m_cancelHandled) {
+            QJsonObject obj;
+            obj.insert(QStringLiteral("signal"),
+                       sig == SIGINT ? QStringLiteral("SIGINT") : QStringLiteral("SIGTERM"));
+            obj.insert(QStringLiteral("exitCode"), rc);
+            emitEvent(QStringLiteral("cancelled"), obj);
+            m_cancelHandled = true;
+        } else if (!m_jsonMode && !m_cancelHandled) {
+            writeStderr(QStringLiteral("cancelled by signal"));
+            m_cancelHandled = true;
+        }
+        return rc;
+    }
 
     if (m_processingResultCode != EXIT_OK) {
         return m_processingResultCode;
@@ -474,12 +754,24 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
 
     VideoQueueItem* item = queue.getVideo(0);
     if (!item || item->outputDirectory.isEmpty()) {
-        writeStderr(QStringLiteral("error: processing produced no output directory"));
+        const QString msg = QStringLiteral("processing produced no output directory");
+        if (m_jsonMode) {
+            emitError(QStringLiteral("processing_failed"), msg, EXIT_PROCESSING_FAILED);
+        } else {
+            writeStderr(QStringLiteral("error: ") + msg);
+        }
         return EXIT_PROCESSING_FAILED;
     }
 
     *outSlidesDir = item->outputDirectory;
     *outSlideCount = m_processingSlideCount;
+
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("count"), m_processingSlideCount);
+        obj.insert(QStringLiteral("slidesDir"), item->outputDirectory);
+        emitEvent(QStringLiteral("slides_extracted"), obj);
+    }
     return EXIT_OK;
 }
 
@@ -487,6 +779,9 @@ int CliRunner::runPostProcessingStage(const QString& slidesDir)
 {
     PostProcessor processor;
     m_lastPostCurrent = -1;
+    m_postStage = m_phashRedundant || m_phashExclusion
+        ? QStringLiteral("phash") : QStringLiteral("ml");
+    m_postProcessingFailed = false;
     m_postProgressTimer.start();
 
     connect(&processor, &PostProcessor::progressUpdated,
@@ -516,11 +811,23 @@ int CliRunner::runPostProcessingStage(const QString& slidesDir)
         /*useApplicationTrash=*/true,
         /*baseOutputDir=*/m_outputDir);
 
-    writeStdout(QString(QStringLiteral("[post] removed=%1 (pHash=%2, ML=%3)"))
-                    .arg(result.totalRemoved)
-                    .arg(result.removedByPHash)
-                    .arg(result.removedByML));
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("totalRemoved"), result.totalRemoved);
+        obj.insert(QStringLiteral("removedByPHash"), result.removedByPHash);
+        obj.insert(QStringLiteral("removedByML"), result.removedByML);
+        emitEvent(QStringLiteral("post_complete"), obj);
+    } else {
+        writeStdout(QString(QStringLiteral("[post] removed=%1 (pHash=%2, ML=%3)"))
+                        .arg(result.totalRemoved)
+                        .arg(result.removedByPHash)
+                        .arg(result.removedByML));
+    }
 
+    // Surface ML-only failures via the previously-unused exit code.
+    if (m_postProcessingFailed && m_mlClassify && !m_phashRedundant && !m_phashExclusion) {
+        return EXIT_POSTPROCESSING_FAILED;
+    }
     return EXIT_OK;
 }
 
@@ -529,19 +836,30 @@ void CliRunner::onVideoProcessingCompleted(int /*videoIndex*/, int slidesExtract
     m_processingSlideCount = slidesExtracted;
     m_processingResultCode = EXIT_OK;
     m_processingFinished = true;
-    writeStdout(QString(QStringLiteral("[done] %1 slides extracted")).arg(slidesExtracted));
+    if (!m_jsonMode) {
+        writeStdout(QString(QStringLiteral("[done] %1 slides extracted")).arg(slidesExtracted));
+    }
+    // In JSON mode we emit slides_extracted from runProcessingStage where the
+    // resolved slidesDir is also available — keeps the event self-contained.
 }
 
 void CliRunner::onVideoProcessingError(int /*videoIndex*/, const QString& error)
 {
     m_processingResultCode = EXIT_PROCESSING_FAILED;
     m_processingFinished = true;
-    writeStderr(QStringLiteral("error: ") + error);
+    if (m_jsonMode) {
+        emitError(QStringLiteral("processing_failed"), error, EXIT_PROCESSING_FAILED);
+    } else {
+        writeStderr(QStringLiteral("error: ") + error);
+    }
 }
 
-void CliRunner::onFrameExtractionProgress(int /*videoIndex*/, double percentage)
+void CliRunner::onFrameExtractionProgress(int videoIndex, double percentage)
 {
     const bool atEnd = percentage >= 99.95;
+    if (atEnd && m_lastFramePercent >= 99.95) {
+        return;
+    }
     if (!atEnd &&
         m_frameProgressTimer.elapsed() < 100 &&
         std::abs(percentage - m_lastFramePercent) < 0.5) {
@@ -549,9 +867,16 @@ void CliRunner::onFrameExtractionProgress(int /*videoIndex*/, double percentage)
     }
     m_frameProgressTimer.restart();
     m_lastFramePercent = percentage;
-    writeProgressBar(percentage);
-    if (atEnd) {
-        finishProgressBar();
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("percent"), percentage);
+        obj.insert(QStringLiteral("videoIndex"), videoIndex);
+        emitEvent(QStringLiteral("frame_progress"), obj);
+    } else {
+        writeProgressBar(percentage);
+        if (atEnd) {
+            finishProgressBar();
+        }
     }
 }
 
@@ -561,20 +886,51 @@ void CliRunner::onPostProgressUpdated(int current, int total)
     if (m_postProgressTimer.elapsed() < 250 && current != total) return;
     m_postProgressTimer.restart();
     m_lastPostCurrent = current;
-    writeStdout(QString(QStringLiteral("[post] %1/%2")).arg(current).arg(total));
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("current"), current);
+        obj.insert(QStringLiteral("total"), total);
+        obj.insert(QStringLiteral("stage"), m_postStage);
+        emitEvent(QStringLiteral("post_progress"), obj);
+    } else {
+        writeStdout(QString(QStringLiteral("[post] %1/%2")).arg(current).arg(total));
+    }
 }
 
 void CliRunner::onImageMovedToTrash(const QString& filePath, const QString& reason)
 {
-    writeStdout(QString(QStringLiteral("[trash] %1 (%2)")).arg(QFileInfo(filePath).fileName(), reason));
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("file"), QFileInfo(filePath).fileName());
+        obj.insert(QStringLiteral("path"), filePath);
+        obj.insert(QStringLiteral("reason"), reason);
+        obj.insert(QStringLiteral("category"), trashCategoryForReason(reason));
+        emitEvent(QStringLiteral("trash"), obj);
+    } else {
+        writeStdout(QString(QStringLiteral("[trash] %1 (%2)")).arg(QFileInfo(filePath).fileName(), reason));
+    }
 }
 
 void CliRunner::onMLClassificationStarted(const QString& executionProvider)
 {
-    writeStdout(QStringLiteral("[ml] execution provider: ") + executionProvider);
+    m_postStage = QStringLiteral("ml");
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("executionProvider"), executionProvider);
+        emitEvent(QStringLiteral("ml_started"), obj);
+    } else {
+        writeStdout(QStringLiteral("[ml] execution provider: ") + executionProvider);
+    }
 }
 
 void CliRunner::onMLClassificationFailed(const QString& errorMessage)
 {
-    writeStderr(QStringLiteral("[ml] failed: ") + errorMessage);
+    m_postProcessingFailed = true;
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("message"), errorMessage);
+        emitEvent(QStringLiteral("ml_failed"), obj, /*toStderr=*/true);
+    } else {
+        writeStderr(QStringLiteral("[ml] failed: ") + errorMessage);
+    }
 }

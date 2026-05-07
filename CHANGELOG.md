@@ -42,9 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Batch Auto Crop**: Slides Review can auto-crop selected extracted slides and restore/crop selected removed `ml_maybe_slide` items when a slide area is detected.
 
 #### Command-Line Interface
-- **CLI Mode**: Added `--cli` execution path for running extractions without opening the main window.
+- **Direct CLI Launch**: Passing command-line arguments now runs the CLI directly without opening the main window; launching with no user arguments still opens the GUI.
 - **SlidesExtractor Wrapper**: Added Settings UI to install, reinstall, uninstall, and inspect the command-line wrapper.
 - **CLI Options**: Added command-line support for video/output paths, pHash duplicate removal, pHash exclusion matching, ML classification, threshold overrides, JPEG quality, and ad-hoc exclusion hashes.
+- **Structured JSON Output**: Added `--json` mode with NDJSON events for start, video info, frame progress, trash events, ML state, post-processing progress, completion, errors, and cancellation.
+- **Graceful CLI Cancellation**: Added SIGINT/SIGTERM and Windows console-control handling so active processing stops cleanly and returns conventional cancellation exit codes.
 - **Unicode Arguments**: CLI mode uses Qt-decoded arguments so Unicode paths are preserved on Windows.
 
 #### Slides Export
@@ -62,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Trash Metadata**: Upgraded trash metadata to schema `1.1` with explicit removal categories and backward-compatible category derivation for older entries.
 - **Status-Driven Dialog UX**: Removed QMessageBox usage from updated dialogs in favor of `statusMessage` signals.
 - **macOS Bundle Icon**: Updated bundle icon metadata to use `icon.icns` consistently.
+- **CLI Installer Detection**: Improved Windows wrapper freshness checks by parsing batch-file targets and comparing normalized executable paths.
 
 ### ⚙️ Technical
 

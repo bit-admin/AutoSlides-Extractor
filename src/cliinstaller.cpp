@@ -36,6 +36,60 @@ QString quoteForBatch(const QString& path)
 {
     return QStringLiteral("\"") + path + QStringLiteral("\"");
 }
+
+QString normalizedWindowsPathForComparison(QString path)
+{
+    path = path.trimmed();
+    if (path.size() >= 2 &&
+        path.front() == QLatin1Char('"') &&
+        path.back() == QLatin1Char('"')) {
+        path = path.mid(1, path.size() - 2);
+    }
+    return QDir::cleanPath(QDir::fromNativeSeparators(path));
+}
+
+QString batchCommandTarget(const QString& line)
+{
+    QString command = line.trimmed();
+    if (command.startsWith(QStringLiteral("@echo"), Qt::CaseInsensitive)) {
+        return QString();
+    }
+
+    if (command.startsWith(QLatin1Char('"'))) {
+        const qsizetype closingQuote = command.indexOf(QLatin1Char('"'), 1);
+        if (closingQuote > 1) {
+            return command.mid(1, closingQuote - 1);
+        }
+        return QString();
+    }
+
+    const qsizetype firstSpace = command.indexOf(QLatin1Char(' '));
+    return firstSpace > 0 ? command.left(firstSpace) : command;
+}
+
+bool wrapperTargetsCurrentExecutable(const QString& contents, const QString& currentBinary)
+{
+    const QString normalizedCurrent = normalizedWindowsPathForComparison(currentBinary);
+    if (normalizedCurrent.isEmpty()) {
+        return false;
+    }
+
+    const QStringList lines = contents.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& rawLine : lines) {
+        const QString target = batchCommandTarget(rawLine);
+        if (target.isEmpty()) {
+            continue;
+        }
+        if (normalizedWindowsPathForComparison(target).compare(normalizedCurrent, Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+
+    // Existing wrappers are simple text files; keep a tolerant fallback for wrappers
+    // written by older versions while still normalizing native separators.
+    const QString normalizedContents = QDir::fromNativeSeparators(contents);
+    return normalizedContents.contains(normalizedCurrent, Qt::CaseInsensitive);
+}
 #endif
 
 #if defined(Q_OS_WIN)
@@ -95,13 +149,15 @@ CliInstaller::State CliInstaller::installState()
         return State::Stale;
     }
 #ifdef Q_OS_WIN
-    Qt::CaseSensitivity cs = Qt::CaseInsensitive;
+    if (wrapperTargetsCurrentExecutable(contents, currentBinary)) {
+        return State::Installed;
+    }
 #else
     Qt::CaseSensitivity cs = Qt::CaseSensitive;
-#endif
     if (contents.contains(currentBinary, cs)) {
         return State::Installed;
     }
+#endif
     return State::Stale;
 }
 
