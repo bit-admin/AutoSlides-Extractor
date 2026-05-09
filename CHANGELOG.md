@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-05-09
+
+### 🚀 Added
+
+#### Command-Line Interface
+- **Compatibility Mode**: Added `--compatible` for external Electron-style consumers.
+  - Strips the `screen_` prefix from generated folder and slide names.
+  - Outputs slides as `Slide_<video>_<index>.png` instead of JPEG files.
+  - Skips post-processing and disallows pHash/ML options that conflict with compatibility output.
+  - Includes a `compatible` flag in JSON start events.
+
+### 🛠 Changed
+
+- **Version Bump**: Updated application, CMake, Windows resource, NSIS installer, and vcpkg metadata from `1.2.0` to `1.2.1`.
+
+---
+
 ## [1.2.0] - 2026-05-06
 
 ### 🚀 Added

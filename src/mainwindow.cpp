@@ -37,7 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     updateControlButtons();
     updateQueueTable();
 
-    setWindowTitle("AutoSlides Extractor v1.2.0");
+    setWindowTitle("AutoSlides Extractor v1.2.1");
     resize(960, 720);  // Double width for left/right split
     setMinimumSize(960, 700);  // Set current size as minimum size
 }

@@ -9,6 +9,16 @@
 #include <thread>
 #include <functional>
 
+namespace {
+// Compatibility-mode helper: external (Electron) consumers feed in
+// `screen_<name>.mp4` and expect outputs without the `screen_` prefix.
+QString stripScreenPrefix(const QString& name)
+{
+    static const QString kPrefix = QStringLiteral("screen_");
+    return name.startsWith(kPrefix, Qt::CaseSensitive) ? name.mid(kPrefix.size()) : name;
+}
+}  // namespace
+
 ProcessingThread::ProcessingThread(VideoQueue* videoQueue, QObject *parent)
     : QThread(parent),
       m_videoQueue(videoQueue),
@@ -234,6 +244,7 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         video->outputDirectory = outputDir;  // Store for post-processing
         QFileInfo videoFileInfo(video->filePath);
         QString videoName = videoFileInfo.baseName();
+        if (m_config.compatibleMode) videoName = stripScreenPrefix(videoName);
 
         // Step 3: Start producer-consumer threads
         // videoPathStr already declared above, reuse it
@@ -280,6 +291,7 @@ QString ProcessingThread::createOutputDirectory(const QString& videoPath, const 
 {
     QFileInfo videoInfo(videoPath);
     QString videoName = videoInfo.baseName();
+    if (m_config.compatibleMode) videoName = stripScreenPrefix(videoName);
     QString outputDir = QDir(baseOutputDir).filePath("slides_" + videoName);
 
     QDir dir;
@@ -573,16 +585,19 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
 
                     // Save slides with proper naming (continuing from previous slides)
                     int startSlideNumber = static_cast<int>(m_processingState.savedSlideIndices.size()) - static_cast<int>(selectedFrames.size()) + 1;
+                    const bool compat = m_config.compatibleMode;
                     for (size_t i = 0; i < selectedFrames.size(); ++i) {
-                        QString fileName = QString("slide_%1_%2.jpg")
-                                          .arg(videoName)
-                                          .arg(startSlideNumber + static_cast<int>(i), 3, 10, QChar('0'));
+                        const int slideIndex = startSlideNumber + static_cast<int>(i);
+                        QString fileName = compat
+                            ? QString("Slide_%1_%2.png").arg(videoName).arg(slideIndex, 3, 10, QChar('0'))
+                            : QString("slide_%1_%2.jpg").arg(videoName).arg(slideIndex, 3, 10, QChar('0'));
                         QString filePath = QDir(outputDir).filePath(fileName);
 
-                        // Save the OpenCV Mat as JPEG using Unicode-safe helper
                         std::vector<int> compression_params;
-                        compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
-                        compression_params.push_back(m_config.jpegQuality);
+                        if (!compat) {
+                            compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
+                            compression_params.push_back(m_config.jpegQuality);
+                        }
 
                         if (!ImageIOHelper::imwriteUnicode(filePath, selectedFrames[i], compression_params)) {
                             QString errorMsg = QString("Failed to save slide: %1").arg(filePath);

@@ -391,6 +391,7 @@ int CliRunner::run(const QStringList& arguments)
         obj.insert(QStringLiteral("output"), m_outputDir);
         obj.insert(QStringLiteral("ssimThreshold"), ssim);
         obj.insert(QStringLiteral("phases"), phases);
+        obj.insert(QStringLiteral("compatible"), m_config.compatibleMode);
         obj.insert(QStringLiteral("pid"), static_cast<qint64>(QCoreApplication::applicationPid()));
         emitEvent(QStringLiteral("start"), obj);
     } else {
@@ -496,6 +497,12 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
                        "instead of human-readable text. Suppresses the progress bar. "
                        "Designed for child_process.spawn integration (e.g. Electron)."));
 
+    QCommandLineOption compatibleOpt(QStringLiteral("compatible"),
+        QStringLiteral("Compatibility mode for an external (Electron) consumer. Strips the "
+                       "'screen_' prefix from the video name in folder/file names, uses 'Slide_' "
+                       "file prefix, outputs PNG instead of JPG, and disables all post-processing. "
+                       "Not allowed with phash/ml flags. --jpeg-quality is ignored."));
+
     parser.addOption(videoOpt);
     parser.addOption(outputOpt);
     parser.addOption(ssimOpt);
@@ -518,6 +525,7 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(mlSlideMaxOpt);
     parser.addOption(mlDelMaybeOpt);
     parser.addOption(jsonOpt);
+    parser.addOption(compatibleOpt);
 
     if (!parser.parse(arguments)) {
         *errorOut = parser.errorText();
@@ -559,6 +567,25 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
 
     m_videoPath = parser.value(videoOpt);
     m_outputDir = parser.value(outputOpt);
+
+    m_config.compatibleMode = parser.isSet(compatibleOpt);
+    if (m_config.compatibleMode) {
+        static constexpr const char* kForbidden[] = {
+            "phash-redundant", "phash-exclusion", "phash-exclusion-hashes",
+            "hamming-threshold", "ml-classify", "ml-model", "ml-execution-provider",
+            "ml-not-slide-high", "ml-not-slide-low",
+            "ml-maybe-slide-high", "ml-maybe-slide-low",
+            "ml-slide-max", "ml-delete-maybe-slides",
+        };
+        for (const char* name : kForbidden) {
+            if (parser.isSet(QString::fromLatin1(name))) {
+                *errorOut = QStringLiteral("--%1 is not allowed with --compatible")
+                                .arg(QString::fromLatin1(name));
+                return false;
+            }
+        }
+        // --jpeg-quality is intentionally ignored (output is PNG, quality is irrelevant).
+    }
 
     bool ok = true;
     if (parser.isSet(ssimOpt)) {
@@ -777,6 +804,8 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
 
 int CliRunner::runPostProcessingStage(const QString& slidesDir)
 {
+    if (m_config.compatibleMode) return EXIT_OK;
+
     PostProcessor processor;
     m_lastPostCurrent = -1;
     m_postStage = m_phashRedundant || m_phashExclusion

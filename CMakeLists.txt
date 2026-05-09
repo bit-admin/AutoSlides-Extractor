@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 1.2.0 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 1.2.1 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)

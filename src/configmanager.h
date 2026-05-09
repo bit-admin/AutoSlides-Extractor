@@ -59,6 +59,11 @@ struct AppConfig {
     // Output settings
     int jpegQuality;
 
+    // CLI-only: compatibility mode for an external (Electron) consumer.
+    // Strips "screen_" from the video name, uses "Slide_" file prefix,
+    // outputs PNG instead of JPG, and skips post-processing. Not persisted.
+    bool compatibleMode = false;
+
     // Post-processing settings
     bool enablePostProcessing;
     bool deleteRedundant;
