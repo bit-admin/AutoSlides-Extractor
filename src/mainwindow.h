@@ -18,6 +18,7 @@
 #include <QTextEdit>
 #include <QFileDialog>
 #include <QTimer>
+#include <QColor>
 #include <memory>
 
 #include "videoqueue.h"
@@ -25,6 +26,7 @@
 #include "configmanager.h"
 #include "hardwaredecoder.h"
 #include "settingsdialog.h"
+#include "processingpipeline.h"
 
 class MainWindow : public QMainWindow
 {
@@ -91,11 +93,16 @@ private:
     void saveConfiguration();
     void updateControlButtons();
     void updateQueueTable();
+    void populateQueueRow(int row, const VideoQueueItem& video);
+    QColor rowColorForStatus(ProcessingStatus status) const;
     void updateFrameExtractionProgress(int videoIndex, double percentage);
     void updateSlideProcessingProgress(int videoIndex, double percentage);
     void resetProgressBars(int videoIndex);
     void connectSignals();
     void performPostProcessing(int videoIndex);
+    // Wire a pipeline's ML/log signals to the status text panel (shared by the
+    // automatic and manual post-processing paths).
+    void connectPostProcessingLog(ProcessingPipeline& pipeline);
 
     // UI Components
     QWidget* m_centralWidget;

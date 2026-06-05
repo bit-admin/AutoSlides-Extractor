@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 1.2.1 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 1.2.2 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -135,59 +135,6 @@ elseif(CPU_ARCH STREQUAL "x86_64" OR CPU_ARCH STREQUAL "x86")
         list(APPEND SIMD_DEFINITIONS "-DSSE42_AVAILABLE")
         message(STATUS "Enabled SSE4.2 SIMD support")
     endif()
-endif()
-
-# GPU Acceleration Detection
-set(GPU_LIBRARIES "")
-set(GPU_DEFINITIONS "")
-
-# CUDA Detection (using modern CUDAToolkit)
-find_package(CUDAToolkit QUIET)
-if(CUDAToolkit_FOUND)
-    set(GPU_DEFINITIONS "${GPU_DEFINITIONS};-DCUDA_AVAILABLE")
-    list(APPEND GPU_LIBRARIES CUDA::cudart CUDA::cuda_driver)
-    message(STATUS "CUDA found: ${CUDAToolkit_VERSION}")
-else()
-    message(STATUS "CUDA not found")
-endif()
-
-# OpenCL Detection
-find_package(OpenCL QUIET)
-if(OpenCL_FOUND)
-    set(GPU_DEFINITIONS "${GPU_DEFINITIONS};-DOPENCL_AVAILABLE")
-    list(APPEND GPU_LIBRARIES ${OpenCL_LIBRARIES})
-    message(STATUS "OpenCL found")
-else()
-    message(STATUS "OpenCL not found")
-endif()
-
-# Metal Detection (macOS/iOS only)
-if(APPLE)
-    find_library(METAL_FRAMEWORK Metal)
-    if(METAL_FRAMEWORK)
-        set(GPU_DEFINITIONS "${GPU_DEFINITIONS};-DMETAL_AVAILABLE")
-        list(APPEND GPU_LIBRARIES ${METAL_FRAMEWORK})
-        message(STATUS "Metal framework found")
-    endif()
-endif()
-
-# DirectX Detection (Windows only)
-if(WIN32)
-    find_library(D3D11_LIBRARY d3d11)
-    find_library(DXGI_LIBRARY dxgi)
-    if(D3D11_LIBRARY AND DXGI_LIBRARY)
-        set(GPU_DEFINITIONS "${GPU_DEFINITIONS};-DDIRECTX_AVAILABLE")
-        list(APPEND GPU_LIBRARIES ${D3D11_LIBRARY} ${DXGI_LIBRARY})
-        message(STATUS "DirectX 11 found")
-    endif()
-endif()
-
-# Vulkan Detection
-find_package(Vulkan QUIET)
-if(Vulkan_FOUND)
-    set(GPU_DEFINITIONS "${GPU_DEFINITIONS};-DVULKAN_AVAILABLE")
-    list(APPEND GPU_LIBRARIES ${Vulkan_LIBRARIES})
-    message(STATUS "Vulkan found")
 endif()
 
 # Find required packages
@@ -482,10 +429,8 @@ set(SOURCES
     src/processingthread.cpp
     src/chunkprocessor.cpp
     src/memoryoptimizer.cpp
-    src/platformdetector.cpp
-    src/optimizationmanager.cpp
-    src/gpuacceleration.cpp
-    src/performancemonitor.cpp
+    src/processingpipeline.cpp
+    src/naturalsorter.cpp
     src/phashcalculator.cpp
     src/trashmanager.cpp
     src/trashmetadata.cpp
@@ -498,6 +443,13 @@ set(SOURCES
     src/mlclassifier.cpp
     src/autocropdetector.cpp
     src/pdfmakerdialog.cpp
+    src/pdfexporter.cpp
+    src/autocroptestpreviewwidget.cpp
+    src/clitab.cpp
+    src/autocroptab.cpp
+    src/processingtab.cpp
+    src/postprocessingtab.cpp
+    src/mlclassificationtab.cpp
     src/clirunner.cpp
     src/cliinstaller.cpp
 )
@@ -522,10 +474,8 @@ set(HEADERS
     src/processingthread.h
     src/chunkprocessor.h
     src/memoryoptimizer.h
-    src/platformdetector.h
-    src/optimizationmanager.h
-    src/gpuacceleration.h
-    src/performancemonitor.h
+    src/processingpipeline.h
+    src/naturalsorter.h
     src/phashcalculator.h
     src/trashentry.h
     src/trashmanager.h
@@ -540,6 +490,13 @@ set(HEADERS
     src/mlclassifier.h
     src/autocropdetector.h
     src/pdfmakerdialog.h
+    src/pdfexporter.h
+    src/autocroptestpreviewwidget.h
+    src/clitab.h
+    src/autocroptab.h
+    src/processingtab.h
+    src/postprocessingtab.h
+    src/mlclassificationtab.h
     src/clirunner.h
     src/cliinstaller.h
 )
@@ -564,10 +521,6 @@ if(SIMD_DEFINITIONS)
     target_compile_definitions(AutoSlidesExtractor PRIVATE ${SIMD_DEFINITIONS})
 endif()
 
-if(GPU_DEFINITIONS)
-    target_compile_definitions(AutoSlidesExtractor PRIVATE ${GPU_DEFINITIONS})
-endif()
-
 if(ONNX_DEFINITIONS)
     target_compile_definitions(AutoSlidesExtractor PRIVATE ${ONNX_DEFINITIONS})
 endif()
@@ -578,7 +531,6 @@ target_link_libraries(AutoSlidesExtractor PRIVATE
     Qt6::Widgets
     Qt6::Gui
     ${OpenCV_LIBS}
-    ${GPU_LIBRARIES}
 )
 
 # Link ONNX Runtime if available
@@ -619,18 +571,6 @@ if(ONNX_INCLUDE_DIRS)
     target_include_directories(AutoSlidesExtractor PRIVATE ${ONNX_INCLUDE_DIRS})
 endif()
 
-# Add GPU-specific include directories
-if(CUDAToolkit_FOUND)
-    target_include_directories(AutoSlidesExtractor PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
-endif()
-
-if(OpenCL_FOUND)
-    target_include_directories(AutoSlidesExtractor PRIVATE ${OpenCL_INCLUDE_DIRS})
-endif()
-
-if(Vulkan_FOUND)
-    target_include_directories(AutoSlidesExtractor PRIVATE ${Vulkan_INCLUDE_DIRS})
-endif()
 
 # Set bundle properties for macOS
 set_target_properties(AutoSlidesExtractor PROPERTIES

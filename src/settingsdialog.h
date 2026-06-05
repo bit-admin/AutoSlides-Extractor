@@ -23,11 +23,13 @@
 #include <QTextEdit>
 #include "configmanager.h"
 #include "postprocessor.h"
-#include "rangeslider.h"
-#include "styledslider.h"
 
 class QPlainTextEdit;
-class AutoCropTestPreviewWidget;
+class CliTab;
+class AutoCropTab;
+class ProcessingTab;
+class PostProcessingTab;
+class MLClassificationTab;
 
 class SettingsDialog : public QDialog
 {
@@ -37,36 +39,16 @@ public:
     explicit SettingsDialog(const AppConfig& config, ConfigManager* configManager, int initialTab = 0, QWidget *parent = nullptr);
 
     AppConfig getConfig() const;
-    QList<ExclusionEntry> getExclusionList() const { return m_exclusionList; }
+    QList<ExclusionEntry> getExclusionList() const;
 
 signals:
     void statusMessage(const QString& message);
 
 private slots:
-    void onSSIMPresetChanged();
-    void onDownsamplingToggled();
-    void onDownsamplePresetChanged();
     void onOkClicked();
     void onCancelClicked();
     void onApplyClicked();
     void onRestoreDefaultsClicked();
-
-    // Post-processing slots
-    void onAddFromImageClicked();
-    void onManualInputClicked();
-    void onDeleteExclusionClicked();
-
-    // ML Classification slots
-#ifdef ONNX_AVAILABLE
-    void onTestMLClassificationClicked();
-#endif
-
-    // CLI tab slots
-    void onInstallCLIClicked();
-    void onUninstallCLIClicked();
-    void onCopyExampleClicked();
-    void onCopyPathLineClicked();
-    void onRefreshCliStatus();
 
 private:
     void setupUI();
@@ -77,96 +59,31 @@ private:
     void setupCLITab();
     void updateUIFromConfig();
     void updateConfigFromUI();
-    void updateDownsampleDimensionsFromPreset();
-    void updateDownsamplePresetFromDimensions();
-    void updateExclusionTable();
-    AutoCropConfig currentAutoCropTestConfig(AutoCropMode forcedMode) const;
-    void runAutoCropTest(AutoCropMode forcedMode);
 
     AppConfig m_config;
     AppConfig m_originalConfig;
     ConfigManager* m_configManager;
-    QList<ExclusionEntry> m_exclusionList;
 
     // UI elements
     QVBoxLayout* m_mainLayout;
     QTabWidget* m_tabWidget;
 
-    // Processing Tab
-    QWidget* m_processingTab;
+    // Processing Tab (self-contained widget)
+    ProcessingTab* m_processingTab = nullptr;
 
-    // SSIM Settings Group
-    QGroupBox* m_ssimGroup;
-    QComboBox* m_ssimPresetCombo;
-    QDoubleSpinBox* m_customSSIMSpinBox;
-    QLabel* m_ssimHelpLabel;
+    // Post-Processing Tab (self-contained widget)
+    PostProcessingTab* m_postProcessingTab = nullptr;
 
-    // Chunk Size Settings Group
-    QGroupBox* m_chunkGroup;
-    QSpinBox* m_chunkSizeSpinBox;
-    QLabel* m_chunkHelpLabel;
-
-    // Output Settings Group
-    QGroupBox* m_outputGroup;
-    QSpinBox* m_jpegQualitySpinBox;
-    QLabel* m_outputHelpLabel;
-
-    // Downsampling Settings Group
-    QGroupBox* m_downsamplingGroup;
-    QCheckBox* m_enableDownsamplingCheckBox;
-    QComboBox* m_downsamplePresetCombo;
-    QSpinBox* m_downsampleWidthSpinBox;
-    QSpinBox* m_downsampleHeightSpinBox;
-    QLabel* m_downsamplingHelpLabel;
-
-    // Post-Processing Tab (pHash)
-    QWidget* m_postProcessingTab;
-    QSpinBox* m_hammingThresholdSpinBox;
-    QTableWidget* m_exclusionTable;
-    QPushButton* m_addFromImageButton;
-    QPushButton* m_manualInputButton;
-
-    // ML Classification Tab
+    // ML Classification Tab (self-contained widget; only created when ONNX_AVAILABLE)
 #ifdef ONNX_AVAILABLE
-    QWidget* m_mlClassificationTab;
-    QCheckBox* m_mlDeleteMaybeSlidesCheckBox;
-    QLineEdit* m_mlModelPathEdit;
-    QPushButton* m_mlBrowseModelButton;
-    QPushButton* m_mlUseDefaultModelButton;
-    QPushButton* m_mlTestButton;
-    QTextEdit* m_mlTestResultText;
-
-    // Range sliders for 2-stage thresholds
-    RangeSlider* m_mlNotSlideRangeSlider;
-    RangeSlider* m_mlMaybeSlideRangeSlider;
-
-    // Shared slide max threshold for medium confidence zone
-    StyledSlider* m_mlSlideMaxThresholdSlider;
+    MLClassificationTab* m_mlClassificationTab = nullptr;
 #endif
 
-    // Auto Crop Tab
-    QWidget* m_autoCropTab = nullptr;
-    QComboBox* m_autoCropModeCombo = nullptr;
-    QDoubleSpinBox* m_autoCropAspectToleranceSpin = nullptr;
-    QDoubleSpinBox* m_autoCropYoloConfSpin = nullptr;
-    QLineEdit* m_autoCropYoloModelPathEdit = nullptr;
-    QPushButton* m_autoCropYoloBrowseButton = nullptr;
-    QPushButton* m_autoCropYoloUseDefaultButton = nullptr;
-    QLabel* m_autoCropModelInfoLabel = nullptr;
-    QPushButton* m_autoCropTestCannyButton = nullptr;
-    QPushButton* m_autoCropTestYoloButton = nullptr;
-    QLabel* m_autoCropTestResultLabel = nullptr;
-    AutoCropTestPreviewWidget* m_autoCropTestPreview = nullptr;
+    // Auto Crop Tab (self-contained widget)
+    AutoCropTab* m_autoCropTab = nullptr;
 
-    // CLI Tab
-    QWidget* m_cliTab = nullptr;
-    QLabel* m_cliStatusLabel = nullptr;
-    QLabel* m_cliPathHintLabel = nullptr;
-    QPushButton* m_cliCopyPathLineButton = nullptr;
-    QPushButton* m_cliInstallButton = nullptr;
-    QPushButton* m_cliUninstallButton = nullptr;
-    QPlainTextEdit* m_cliExampleText = nullptr;
-    QPushButton* m_cliCopyExampleButton = nullptr;
+    // CLI Tab (self-contained widget)
+    CliTab* m_cliTab = nullptr;
 
     // Dialog buttons
     QDialogButtonBox* m_buttonBox;

@@ -1,4 +1,6 @@
 #include "pdfmakerdialog.h"
+#include "pdfexporter.h"
+#include "naturalsorter.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -12,10 +14,6 @@
 #include <QCheckBox>
 #include <QMouseEvent>
 #include <QApplication>
-#include <QPdfWriter>
-#include <QPainter>
-#include <QBuffer>
-#include <QPageSize>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFrame>
@@ -209,7 +207,7 @@ void PdfMakerDialog::loadFolders()
     );
 
     if (!m_customOrder) {
-        naturalSort(m_folderNames);
+        NaturalSorter::sort(m_folderNames);
     }
 
     populateFolderTable();
@@ -332,168 +330,6 @@ void PdfMakerDialog::swapRows(int row1, int row2)
     m_folderTable->selectRow(row2);
 }
 
-// ==================== Natural Sorting ====================
-
-static QList<QVariant> tokenizeForSort(const QString& str)
-{
-    QList<QVariant> tokens;
-    QString currentText;
-    int i = 0;
-
-    static QMap<QChar, int> weekdayMap = {
-        {QChar(0x4E00), 1},
-        {QChar(0x4E8C), 2},
-        {QChar(0x4E09), 3},
-        {QChar(0x56DB), 4},
-        {QChar(0x4E94), 5},
-        {QChar(0x516D), 6},
-        {QChar(0x65E5), 7},
-    };
-
-    static QMap<QString, int> englishWeekdayMap = {
-        {"monday", 1}, {"mon", 1},
-        {"tuesday", 2}, {"tue", 2}, {"tues", 2},
-        {"wednesday", 3}, {"wed", 3},
-        {"thursday", 4}, {"thu", 4}, {"thur", 4}, {"thurs", 4},
-        {"friday", 5}, {"fri", 5},
-        {"saturday", 6}, {"sat", 6},
-        {"sunday", 7}, {"sun", 7},
-    };
-
-    static QMap<QString, int> monthMap = {
-        {"january", 1}, {"jan", 1},
-        {"february", 2}, {"feb", 2},
-        {"march", 3}, {"mar", 3},
-        {"april", 4}, {"apr", 4},
-        {"may", 5},
-        {"june", 6}, {"jun", 6},
-        {"july", 7}, {"jul", 7},
-        {"august", 8}, {"aug", 8},
-        {"september", 9}, {"sep", 9}, {"sept", 9},
-        {"october", 10}, {"oct", 10},
-        {"november", 11}, {"nov", 11},
-        {"december", 12}, {"dec", 12},
-    };
-
-    while (i < str.length()) {
-        if (i + 2 < str.length() &&
-            str.mid(i, 2) == QString::fromUtf8("星期")) {
-            if (!currentText.isEmpty()) {
-                tokens.append(currentText);
-                currentText.clear();
-            }
-            tokens.append(QString::fromUtf8("星期"));
-
-            QChar weekdayChar = str.at(i + 2);
-            if (weekdayMap.contains(weekdayChar)) {
-                tokens.append(weekdayMap[weekdayChar]);
-                i += 3;
-                continue;
-            }
-        }
-
-        if (str.at(i).isDigit()) {
-            if (!currentText.isEmpty()) {
-                tokens.append(currentText);
-                currentText.clear();
-            }
-
-            QString numStr;
-            while (i < str.length() && str.at(i).isDigit()) {
-                numStr += str.at(i);
-                ++i;
-            }
-            tokens.append(numStr.toInt());
-            continue;
-        }
-
-        if (str.at(i).isLetter()) {
-            QString word;
-            while (i < str.length() && str.at(i).isLetter()) {
-                word += str.at(i);
-                ++i;
-            }
-
-            QString lowerWord = word.toLower();
-
-            if (englishWeekdayMap.contains(lowerWord)) {
-                if (!currentText.isEmpty()) {
-                    tokens.append(currentText);
-                    currentText.clear();
-                }
-                tokens.append(QString("__weekday__"));
-                tokens.append(englishWeekdayMap[lowerWord]);
-                continue;
-            }
-
-            if (monthMap.contains(lowerWord)) {
-                if (!currentText.isEmpty()) {
-                    tokens.append(currentText);
-                    currentText.clear();
-                }
-                tokens.append(QString("__month__"));
-                tokens.append(monthMap[lowerWord]);
-                continue;
-            }
-
-            currentText += word;
-            continue;
-        }
-
-        currentText += str.at(i);
-        ++i;
-    }
-
-    if (!currentText.isEmpty()) {
-        tokens.append(currentText);
-    }
-
-    return tokens;
-}
-
-bool PdfMakerDialog::naturalLessThan(const QString& a, const QString& b)
-{
-    QList<QVariant> tokensA = tokenizeForSort(a);
-    QList<QVariant> tokensB = tokenizeForSort(b);
-
-    int len = qMin(tokensA.size(), tokensB.size());
-    for (int i = 0; i < len; ++i) {
-        const QVariant& va = tokensA[i];
-        const QVariant& vb = tokensB[i];
-
-        if (va.typeId() == QMetaType::Int && vb.typeId() == QMetaType::Int) {
-            if (va.toInt() != vb.toInt()) {
-                return va.toInt() < vb.toInt();
-            }
-            continue;
-        }
-
-        if (va.typeId() == QMetaType::QString && vb.typeId() == QMetaType::QString) {
-            QString sa = va.toString();
-            QString sb = vb.toString();
-            int cmp = QString::localeAwareCompare(sa, sb);
-            if (cmp != 0) {
-                return cmp < 0;
-            }
-            continue;
-        }
-
-        if (va.typeId() == QMetaType::Int) {
-            return true;
-        }
-        if (vb.typeId() == QMetaType::Int) {
-            return false;
-        }
-    }
-
-    return tokensA.size() < tokensB.size();
-}
-
-void PdfMakerDialog::naturalSort(QStringList& list)
-{
-    std::sort(list.begin(), list.end(), naturalLessThan);
-}
-
 // ==================== Slots ====================
 
 void PdfMakerDialog::onRefresh()
@@ -564,7 +400,7 @@ void PdfMakerDialog::onOrderToggle()
     updateOrderButton();
 
     if (!m_customOrder) {
-        naturalSort(m_folderNames);
+        NaturalSorter::sort(m_folderNames);
         populateFolderTable();
     }
 }
@@ -663,7 +499,7 @@ QStringList PdfMakerDialog::getImagesInFolder(const QString& folderPath)
         QStringList() << "slide_*.jpg" << "slide_*.jpeg" << "slide_*.png",
         QDir::Files
     );
-    naturalSort(images);
+    NaturalSorter::sort(images);
 
     QStringList fullPaths;
     for (const QString& imageName : images) {
@@ -743,111 +579,27 @@ void PdfMakerDialog::onMakePdf()
     m_progressBar->setValue(0);
     m_makePdfButton->setEnabled(false);
 
-    const int targetHeight = m_resizeComboBox->currentData().toInt();
-    const bool reduceSize = m_reduceFileSizeCheckbox->isChecked();
-    const int jpegQuality = m_jpegQualitySpinBox->value();
+    PdfExportOptions options;
+    options.targetHeight = m_resizeComboBox->currentData().toInt();
+    options.reduceSize = m_reduceFileSizeCheckbox->isChecked();
+    options.jpegQuality = m_jpegQualitySpinBox->value();
     const QString aspectRatioStr = m_aspectRatioComboBox->currentData().toString();
-    const double targetAspect = (aspectRatioStr == "4:3") ? (4.0 / 3.0) : (16.0 / 9.0);
-
-    auto coverCropIfWider = [targetAspect](QImage& img) {
-        if (img.isNull() || img.height() <= 0 || img.width() <= 0) return;
-        const double srcAspect = static_cast<double>(img.width()) / img.height();
-        if (srcAspect > targetAspect + 0.001) {
-            int newWidth = qRound(img.height() * targetAspect);
-            int x = (img.width() - newWidth) / 2;
-            img = img.copy(x, 0, newWidth, img.height());
-        }
-    };
+    options.targetAspect = (aspectRatioStr == "4:3") ? (4.0 / 3.0) : (16.0 / 9.0);
 
     int processedImages = 0;
+    auto onImageProcessed = [&]() {
+        processedImages++;
+        m_progressBar->setValue(processedImages);
+        QApplication::processEvents();
+    };
 
+    // Flatten the selected folders into one ordered image list, then render.
     auto writePdf = [&](const QString& outputPath, const QStringList& folders) -> int {
-        QImage firstImage;
+        QStringList imagePaths;
         for (const QString& fp : folders) {
-            QStringList images = getImagesInFolder(fp);
-            if (!images.isEmpty()) {
-                firstImage = QImage(images.first());
-                if (!firstImage.isNull()) break;
-            }
+            imagePaths.append(getImagesInFolder(fp));
         }
-        if (firstImage.isNull()) {
-            return 0;
-        }
-
-        QSize fixedPageSize;
-        if (reduceSize) {
-            int pageH = targetHeight > 0 ? targetHeight : firstImage.height();
-            int pageW = qRound(pageH * targetAspect);
-            fixedPageSize = QSize(pageW, pageH);
-        }
-
-        QPdfWriter writer(outputPath);
-        writer.setResolution(96);
-        writer.setPageMargins(QMarginsF(0, 0, 0, 0));
-        if (reduceSize) {
-            writer.setPageSize(QPageSize(fixedPageSize, QPageSize::Point));
-        } else {
-            writer.setPageSize(QPageSize(firstImage.size(), QPageSize::Point));
-        }
-
-        QPainter painter(&writer);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform);
-
-        bool isFirstPage = true;
-        int pages = 0;
-
-        for (const QString& fp : folders) {
-            QStringList images = getImagesInFolder(fp);
-            for (const QString& imagePath : images) {
-                QImage image(imagePath);
-
-                if (image.isNull()) {
-                    qWarning() << "PdfMakerDialog: Failed to load image:" << imagePath;
-                    continue;
-                }
-
-                if (!isFirstPage) {
-                    writer.newPage();
-                }
-
-                if (reduceSize) {
-                    coverCropIfWider(image);
-
-                    if (targetHeight > 0 && image.height() > targetHeight) {
-                        image = image.scaledToHeight(targetHeight, Qt::SmoothTransformation);
-                    }
-
-                    QBuffer buffer;
-                    buffer.open(QIODevice::WriteOnly);
-                    image.save(&buffer, "JPEG", jpegQuality);
-                    buffer.close();
-                    buffer.open(QIODevice::ReadOnly);
-                    image.loadFromData(buffer.data());
-
-                    QRect pageRect(0, 0, writer.width(), writer.height());
-                    painter.fillRect(pageRect, Qt::white);
-
-                    QSize fitted = image.size().scaled(pageRect.size(), Qt::KeepAspectRatio);
-                    QRect dst((pageRect.width()  - fitted.width())  / 2,
-                              (pageRect.height() - fitted.height()) / 2,
-                              fitted.width(), fitted.height());
-                    painter.drawImage(dst, image);
-                } else {
-                    writer.setPageSize(QPageSize(image.size(), QPageSize::Point));
-                    QRect pageRect(0, 0, writer.width(), writer.height());
-                    painter.drawImage(pageRect, image);
-                }
-
-                isFirstPage = false;
-                pages++;
-                processedImages++;
-                m_progressBar->setValue(processedImages);
-                QApplication::processEvents();
-            }
-        }
-
-        painter.end();
-        return pages;
+        return PdfExporter::exportToPdf(imagePaths, outputPath, options, onImageProcessed);
     };
 
     if (batchMode) {

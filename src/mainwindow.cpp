@@ -37,7 +37,7 @@ MainWindow::MainWindow(QWidget *parent)
     updateControlButtons();
     updateQueueTable();
 
-    setWindowTitle("AutoSlides Extractor v1.2.1");
+    setWindowTitle("AutoSlides Extractor v1.2.2");
     resize(960, 720);  // Double width for left/right split
     setMinimumSize(960, 700);  // Set current size as minimum size
 }
@@ -739,117 +739,59 @@ void MainWindow::updateQueueTable()
     const auto& videos = m_videoQueue->getAllVideos();
     m_queueTable->setRowCount(static_cast<int>(videos.size()));
 
-    bool ppEnabled = m_config.enablePostProcessing;
-
     for (int i = 0; i < static_cast<int>(videos.size()); ++i) {
-        const VideoQueueItem& video = videos[i];
-
-        // Filename
-        QTableWidgetItem* filenameItem = new QTableWidgetItem(video.fileName);
-        m_queueTable->setItem(i, COL_FILENAME, filenameItem);
-
-        // Status
-        QTableWidgetItem* statusItem = new QTableWidgetItem(VideoQueue::getStatusString(video.status));
-        m_queueTable->setItem(i, COL_STATUS, statusItem);
-
-        // Time
-        QString timeStr = (video.processingTimeSeconds > 0) ?
-                         QString::number(video.processingTimeSeconds, 'f', 1) : "-";
-        QTableWidgetItem* timeItem = new QTableWidgetItem(timeStr);
-        m_queueTable->setItem(i, COL_TIME, timeItem);
-
-        // Extracted
-        QTableWidgetItem* extractedItem = new QTableWidgetItem(QString::number(video.extractedSlides));
-        m_queueTable->setItem(i, COL_EXTRACTED, extractedItem);
-
-        // - pHash (show "-" if PP disabled or not completed yet)
-        QString pHashStr;
-        if (!ppEnabled) {
-            pHashStr = "-";
-        } else if (video.status == ProcessingStatus::Completed) {
-            pHashStr = QString::number(video.movedByPHash);
-        } else {
-            pHashStr = "-";
-        }
-        QTableWidgetItem* pHashItem = new QTableWidgetItem(pHashStr);
-        m_queueTable->setItem(i, COL_PHASH, pHashItem);
-
-        // - ML (show "-" if PP disabled or not completed yet)
-        QString mlStr;
-        if (!ppEnabled) {
-            mlStr = "-";
-        } else if (video.status == ProcessingStatus::Completed) {
-            mlStr = QString::number(video.movedByML);
-        } else {
-            mlStr = "-";
-        }
-        QTableWidgetItem* mlItem = new QTableWidgetItem(mlStr);
-        m_queueTable->setItem(i, COL_ML, mlItem);
-
-        // Saved (extracted - removed, show "-" if PP disabled or not completed)
-        QString savedStr;
-        if (!ppEnabled) {
-            savedStr = "-";
-        } else if (video.status == ProcessingStatus::Completed) {
-            int saved = video.extractedSlides - video.movedToTrash;
-            savedStr = QString::number(saved);
-        } else {
-            savedStr = "-";
-        }
-        QTableWidgetItem* savedItem = new QTableWidgetItem(savedStr);
-        m_queueTable->setItem(i, COL_SAVED, savedItem);
-
-        // Color coding based on status - adapted for dark/light themes
-        QColor rowColor;
-        QPalette palette = this->palette();
-        QColor baseColor = palette.color(QPalette::Base);
-        QColor alternateColor = palette.color(QPalette::AlternateBase);
-
-        switch (video.status) {
-            case ProcessingStatus::Queued:
-                // Use slightly darker/lighter than base depending on theme
-                rowColor = alternateColor;
-                break;
-            case ProcessingStatus::Processing:
-                // Yellow tint - adapt to theme
-                if (palette.color(QPalette::WindowText).lightness() > 128) {
-                    // Dark theme - use darker yellow
-                    rowColor = QColor(80, 80, 20);
-                } else {
-                    // Light theme - use light yellow
-                    rowColor = QColor(255, 255, 200);
-                }
-                break;
-            case ProcessingStatus::Completed:
-                // Green tint - adapt to theme
-                if (palette.color(QPalette::WindowText).lightness() > 128) {
-                    // Dark theme - use darker green
-                    rowColor = QColor(20, 80, 20);
-                } else {
-                    // Light theme - use light green
-                    rowColor = QColor(200, 255, 200);
-                }
-                break;
-            case ProcessingStatus::Error:
-                // Red tint - adapt to theme
-                if (palette.color(QPalette::WindowText).lightness() > 128) {
-                    // Dark theme - use darker red
-                    rowColor = QColor(80, 20, 20);
-                } else {
-                    // Light theme - use light red
-                    rowColor = QColor(255, 200, 200);
-                }
-                break;
-        }
-
-        for (int col = 0; col < m_queueTable->columnCount(); ++col) {
-            if (m_queueTable->item(i, col)) {
-                m_queueTable->item(i, col)->setBackground(rowColor);
-            }
-        }
+        populateQueueRow(i, videos[i]);
     }
 
     // Note: Column widths are set in setupQueueSection() and should not be auto-resized
+}
+
+void MainWindow::populateQueueRow(int row, const VideoQueueItem& video)
+{
+    const bool ppEnabled = m_config.enablePostProcessing;
+    const bool completed = (video.status == ProcessingStatus::Completed);
+
+    // Post-processing counts only make sense once PP ran to completion.
+    auto ppCount = [&](int value) -> QString {
+        return (ppEnabled && completed) ? QString::number(value) : QStringLiteral("-");
+    };
+
+    const QString timeStr = (video.processingTimeSeconds > 0)
+        ? QString::number(video.processingTimeSeconds, 'f', 1) : QStringLiteral("-");
+
+    m_queueTable->setItem(row, COL_FILENAME, new QTableWidgetItem(video.fileName));
+    m_queueTable->setItem(row, COL_STATUS, new QTableWidgetItem(VideoQueue::getStatusString(video.status)));
+    m_queueTable->setItem(row, COL_TIME, new QTableWidgetItem(timeStr));
+    m_queueTable->setItem(row, COL_EXTRACTED, new QTableWidgetItem(QString::number(video.extractedSlides)));
+    m_queueTable->setItem(row, COL_PHASH, new QTableWidgetItem(ppCount(video.movedByPHash)));
+    m_queueTable->setItem(row, COL_ML, new QTableWidgetItem(ppCount(video.movedByML)));
+    m_queueTable->setItem(row, COL_SAVED, new QTableWidgetItem(ppCount(video.extractedSlides - video.movedToTrash)));
+
+    const QColor rowColor = rowColorForStatus(video.status);
+    for (int col = 0; col < m_queueTable->columnCount(); ++col) {
+        if (m_queueTable->item(row, col)) {
+            m_queueTable->item(row, col)->setBackground(rowColor);
+        }
+    }
+}
+
+QColor MainWindow::rowColorForStatus(ProcessingStatus status) const
+{
+    const QPalette pal = this->palette();
+    // "Dark theme" when the window text is light.
+    const bool darkTheme = pal.color(QPalette::WindowText).lightness() > 128;
+
+    switch (status) {
+        case ProcessingStatus::Queued:
+            return pal.color(QPalette::AlternateBase);
+        case ProcessingStatus::Processing:
+            return darkTheme ? QColor(80, 80, 20) : QColor(255, 255, 200);  // yellow tint
+        case ProcessingStatus::Completed:
+            return darkTheme ? QColor(20, 80, 20) : QColor(200, 255, 200);  // green tint
+        case ProcessingStatus::Error:
+            return darkTheme ? QColor(80, 20, 20) : QColor(255, 200, 200);  // red tint
+    }
+    return pal.color(QPalette::AlternateBase);
 }
 
 void MainWindow::updateFrameExtractionProgress(int videoIndex, double percentage)
@@ -918,6 +860,26 @@ void MainWindow::updateMLModelInfo()
 #endif
 }
 
+void MainWindow::connectPostProcessingLog(ProcessingPipeline& pipeline)
+{
+    // ML removals are surfaced individually; pHash removals stay quiet.
+    connect(&pipeline, &ProcessingPipeline::imageMovedToTrash, this,
+            [this](const QString& filePath, const QString& reason) {
+        if (reason.startsWith("ML:")) {
+            QFileInfo fileInfo(filePath);
+            m_statusText->append(QString("  ML removed: %1 - %2").arg(fileInfo.fileName()).arg(reason));
+        }
+    });
+    connect(&pipeline, &ProcessingPipeline::mlClassificationStarted, this,
+            [this](const QString& executionProvider) {
+        m_statusText->append(QString("ML Classification: Enabled (Using %1)").arg(executionProvider));
+    });
+    connect(&pipeline, &ProcessingPipeline::mlClassificationFailed, this,
+            [this](const QString& errorMessage) {
+        m_statusText->append(QString("ML Classification: Failed - %1").arg(errorMessage));
+    });
+}
+
 void MainWindow::performPostProcessing(int videoIndex)
 {
     if (!m_config.enablePostProcessing) {
@@ -934,46 +896,20 @@ void MainWindow::performPostProcessing(int videoIndex)
     // Load exclusion list
     QList<ExclusionEntry> exclusionList = m_configManager->loadExclusionList();
 
-    // Create post-processor
-    PostProcessor processor;
+    // Run post-processing through the shared pipeline
+    ProcessingPipeline pipeline;
+    connectPostProcessingLog(pipeline);
 
-    // Connect to processor signals for ML classification logging
-    connect(&processor, &PostProcessor::imageMovedToTrash, this, [this](const QString& filePath, const QString& reason) {
-        if (reason.startsWith("ML:")) {
-            QFileInfo fileInfo(filePath);
-            m_statusText->append(QString("  ML removed: %1 - %2").arg(fileInfo.fileName()).arg(reason));
-        }
-    });
+    ProcessingPipeline::Request request;
+    request.imageDir = video->outputDirectory;
+    request.deleteRedundant = m_config.deleteRedundant;
+    request.compareExcluded = m_config.compareExcluded;
+    request.enableML = m_config.enableMLClassification;
+    request.exclusionList = exclusionList;
+    request.useApplicationTrash = true;
+    request.baseOutputDir = m_config.outputDirectory;
 
-    // Connect to ML classification started signal
-    connect(&processor, &PostProcessor::mlClassificationStarted, this, [this](const QString& executionProvider) {
-        m_statusText->append(QString("ML Classification: Enabled (Using %1)").arg(executionProvider));
-    });
-
-    // Connect to ML classification failed signal
-    connect(&processor, &PostProcessor::mlClassificationFailed, this, [this](const QString& errorMessage) {
-        m_statusText->append(QString("ML Classification: Failed - %1").arg(errorMessage));
-    });
-
-    // Process the directory
-    PostProcessingResult result = processor.processDirectory(
-        video->outputDirectory,
-        m_config.deleteRedundant,
-        m_config.compareExcluded,
-        m_config.hammingThreshold,
-        exclusionList,
-        m_config.enableMLClassification,
-        m_config.mlModelPath,
-        m_config.mlNotSlideHighThreshold,
-        m_config.mlNotSlideLowThreshold,
-        m_config.mlMaybeSlideHighThreshold,
-        m_config.mlMaybeSlideLowThreshold,
-        m_config.mlSlideMaxThreshold,
-        m_config.mlDeleteMaybeSlides,
-        m_config.mlExecutionProvider,
-        true,  // useApplicationTrash
-        m_config.outputDirectory
-    );
+    PostProcessingResult result = pipeline.runPostProcessing(request, m_config);
 
     // Update video statistics
     video->movedToTrash = result.totalRemoved;
@@ -1015,46 +951,20 @@ void MainWindow::onManualPostProcessingClicked()
     // Load exclusion list
     QList<ExclusionEntry> exclusionList = m_configManager->loadExclusionList();
 
-    // Create post-processor
-    PostProcessor processor;
+    // Run post-processing through the shared pipeline
+    ProcessingPipeline pipeline;
+    connectPostProcessingLog(pipeline);
 
-    // Connect to processor signals for ML classification logging
-    connect(&processor, &PostProcessor::imageMovedToTrash, this, [this](const QString& filePath, const QString& reason) {
-        if (reason.startsWith("ML:")) {
-            QFileInfo fileInfo(filePath);
-            m_statusText->append(QString("  ML removed: %1 - %2").arg(fileInfo.fileName()).arg(reason));
-        }
-    });
+    ProcessingPipeline::Request request;
+    request.imageDir = dir;
+    request.deleteRedundant = m_config.deleteRedundant;
+    request.compareExcluded = m_config.compareExcluded;
+    request.enableML = m_config.enableMLClassification;
+    request.exclusionList = exclusionList;
+    request.useApplicationTrash = true;
+    request.baseOutputDir = m_config.outputDirectory;
 
-    // Connect to ML classification started signal
-    connect(&processor, &PostProcessor::mlClassificationStarted, this, [this](const QString& executionProvider) {
-        m_statusText->append(QString("ML Classification: Enabled (Using %1)").arg(executionProvider));
-    });
-
-    // Connect to ML classification failed signal
-    connect(&processor, &PostProcessor::mlClassificationFailed, this, [this](const QString& errorMessage) {
-        m_statusText->append(QString("ML Classification: Failed - %1").arg(errorMessage));
-    });
-
-    // Process the directory
-    PostProcessingResult result = processor.processDirectory(
-        dir,
-        m_config.deleteRedundant,
-        m_config.compareExcluded,
-        m_config.hammingThreshold,
-        exclusionList,
-        m_config.enableMLClassification,
-        m_config.mlModelPath,
-        m_config.mlNotSlideHighThreshold,
-        m_config.mlNotSlideLowThreshold,
-        m_config.mlMaybeSlideHighThreshold,
-        m_config.mlMaybeSlideLowThreshold,
-        m_config.mlSlideMaxThreshold,
-        m_config.mlDeleteMaybeSlides,
-        m_config.mlExecutionProvider,
-        true,  // useApplicationTrash
-        m_config.outputDirectory
-    );
+    PostProcessingResult result = pipeline.runPostProcessing(request, m_config);
 
     m_statusText->append(QString("Manual post-processing complete: %1 images moved to trash (%2 by pHash, %3 by ML)")
         .arg(result.totalRemoved)

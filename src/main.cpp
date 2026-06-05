@@ -10,7 +10,7 @@ namespace {
 void setApplicationProperties()
 {
     QCoreApplication::setApplicationName(QStringLiteral("AutoSlides Extractor"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("1.2.1"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("1.2.2"));
     QCoreApplication::setOrganizationName(QStringLiteral("AutoSlidesExtractor"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("autoslidesextractor.com"));
 }

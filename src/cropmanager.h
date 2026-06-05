@@ -3,6 +3,7 @@
 
 #include <QString>
 #include <QRect>
+#include <QSize>
 #include "cropentry.h"
 
 /**
@@ -42,6 +43,16 @@ public:
     static bool findEntryForLivePath(const QString& livePath,
                                      const QString& baseOutputDir,
                                      CropEntry& outEntry);
+
+    /**
+     * @brief Scale a crop rectangle from a source image size to a target image
+     *        size, proportionally, and clamp it to the target bounds. Used by
+     *        the baseline-crop workflow to reapply one slide's crop to others.
+     * @return The scaled, clamped rect (may be empty if it falls outside).
+     */
+    static QRect scaleCropRect(const QRect& sourceRectImagePixels,
+                               const QSize& sourceSize,
+                               const QSize& targetSize);
 
     /**
      * @brief Apply a crop to the live slide, preserving the original in

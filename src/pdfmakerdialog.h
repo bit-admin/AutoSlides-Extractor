@@ -54,9 +54,6 @@ private:
     void loadFolders();
     void populateFolderTable();
 
-    void naturalSort(QStringList& list);
-    static bool naturalLessThan(const QString& a, const QString& b);
-
     void updateFolderSelectionLabel();
     void updateOrderButton();
     void swapRows(int row1, int row2);

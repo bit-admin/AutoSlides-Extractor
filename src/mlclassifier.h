@@ -140,6 +140,19 @@ public:
                                bool deleteMaybeSlides);
 
     /**
+     * @brief Produce a human-readable explanation of the keep/remove verdict
+     *        for a single result, applying the same 2-stage logic as
+     *        shouldKeepImage(). Used by the Settings "Test" panel so the
+     *        decision wording lives next to the decision logic, not in the UI.
+     * @return Lines of text (verdict + per-stage reasoning).
+     */
+    static QStringList explainDecision(const ClassificationResult& result,
+                                       const CategoryThresholds& notSlideThresholds,
+                                       const CategoryThresholds& maybeSlideThresholds,
+                                       float slideMaxThreshold,
+                                       bool deleteMaybeSlides);
+
+    /**
      * @brief Get class prefixes used for classification decisions
      * @return List of class prefixes: "slide", "not_slide", "may_be_slide"
      */

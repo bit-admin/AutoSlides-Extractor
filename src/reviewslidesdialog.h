@@ -108,6 +108,12 @@ private:
     void connectSignals();
 
     void loadCropEntries();
+    // Folder name a trash entry belongs to: originalFolder, or "slides_<video>".
+    static QString folderNameForEntry(const TrashEntry& entry);
+    // Refill m_currentFolderRemoved from m_allEntries for m_currentFolderName.
+    void rebuildCurrentFolderRemoved();
+    // Reload trash + crop metadata, rebuild the removed list, and rebuild the grid.
+    void reloadCurrentFolderItems();
     bool isLivePathCropped(const QString& livePath, CropEntry* outEntry = nullptr) const;
     void enterViewerPage(ReviewItemWidget* item);
     void refreshViewerImage();
@@ -135,9 +141,6 @@ private:
     void updateImageActionButtons();
     void relayoutGrid();
     int computeColumns() const;
-
-    static void naturalSort(QStringList& list);
-    static bool naturalLessThan(const QString& a, const QString& b);
 
     QString m_baseOutputDir;
     bool m_emptyTrashToSystemTrash;

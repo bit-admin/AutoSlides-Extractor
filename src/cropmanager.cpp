@@ -6,11 +6,33 @@
 #include <QDir>
 #include <QRegularExpression>
 #include <QDebug>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 
 QString CropManager::cropDirectory(const QString& baseOutputDir)
 {
     return QDir(baseOutputDir).filePath(".extractorCrop");
+}
+
+QRect CropManager::scaleCropRect(const QRect& sourceRectImagePixels,
+                                 const QSize& sourceSize,
+                                 const QSize& targetSize)
+{
+    if (sourceSize.width() <= 0 || sourceSize.height() <= 0) {
+        return QRect();
+    }
+
+    const double sx = static_cast<double>(targetSize.width())  / sourceSize.width();
+    const double sy = static_cast<double>(targetSize.height()) / sourceSize.height();
+
+    QRect scaled(
+        static_cast<int>(std::round(sourceRectImagePixels.x()      * sx)),
+        static_cast<int>(std::round(sourceRectImagePixels.y()      * sy)),
+        static_cast<int>(std::round(sourceRectImagePixels.width()  * sx)),
+        static_cast<int>(std::round(sourceRectImagePixels.height() * sy))
+    );
+
+    return scaled.intersected(QRect(0, 0, targetSize.width(), targetSize.height()));
 }
 
 QString CropManager::encodeBackupFilename(const QString& livePath)

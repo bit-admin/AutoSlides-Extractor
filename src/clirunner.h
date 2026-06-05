@@ -9,6 +9,7 @@
 #include <QJsonObject>
 #include "configmanager.h"
 #include "postprocessor.h"
+#include "processingpipeline.h"
 
 class ProcessingThread;
 class VideoQueue;

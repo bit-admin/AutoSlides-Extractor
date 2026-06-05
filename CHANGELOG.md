@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.2] - 2026-06-06
+
+### 🛠 Changed
+
+#### Structural Refactor
+- **Dead Code Removal**: Deleted the entire GPU-SSIM optimization layer (~5,166 lines) — `OptimizationManager`, `GPUAcceleration`, `PlatformDetector`, and `PerformanceMonitor` were never instantiated or called. The CUDA/OpenCL/Metal/DirectX SSIM backends were incomplete stubs (empty `createGPUCalculators()`, undefined CUDA kernel, wrong OpenCL math, placeholder Metal/DirectX implementations). Removed the associated CMake GPU-detection machinery. The live GPU paths (FFmpeg hardware decoding, ONNX Runtime inference) are unaffected.
+- **ProcessingPipeline Extraction**: Centralized the 16-argument `PostProcessor::processDirectory(...)` call and signal wiring — previously hand-copied in four places (`MainWindow` ×2, `CliRunner`, `ReviewSlidesDialog`) — into a single `ProcessingPipeline` class with a `Request` struct and stable signal surface.
+- **PdfExporter Extraction**: Moved the 100-line PDF rendering lambda from `PdfMakerDialog::onMakePdf` into a standalone `PdfExporter` class. The dialog now flattens selected folders into an ordered image list and delegates rendering.
+- **NaturalSorter Extraction**: Deduplicated the byte-identical natural-order tokenizer and comparator (~110 lines each) from `PdfMakerDialog` and `ReviewSlidesDialog` into a shared `NaturalSorter` namespace with `tokenize`, `lessThan`, and `sort` helpers.
+- **ReviewSlidesDialog Metadata-Reload Deduplication**: Replaced seven identical 13-line metadata-reload blocks and ten folder-name fallback usages with three private helpers: `folderNameForEntry`, `rebuildCurrentFolderRemoved`, and `reloadCurrentFolderItems`.
+- **CropManager::scaleCropRect**: Moved the proportional crop-rect scaling and clamping math (used by baseline crop) from `ReviewSlidesDialog::onApplyBaseline` into `CropManager::scaleCropRect`, a pure geometry helper alongside `applyCrop` and `restoreCrop`.
+- **MLClassifier::explainDecision**: Moved the 80+ lines of 2-stage ML decision reasoning from `SettingsDialog::onTestMLClassificationClicked` into `MLClassifier::explainDecision`, which returns the verdict plus per-stage reason lines — a single source of truth instead of duplicated logic.
+- **SettingsDialog Decomposition**: Reduced `SettingsDialog` from 1,663 lines to 200 lines (.cpp) and 177 to 94 lines (.h) by extracting five self-contained tab widgets and a preview widget:
+  - `ProcessingTab` — SSIM preset, downsampling, chunk size, JPEG quality.
+  - `PostProcessingTab` — Hamming threshold and pHash exclusion list management.
+  - `MLClassificationTab` — Model path, 2-stage threshold sliders, single-image test panel.
+  - `AutoCropTab` — Detection mode, Canny/YOLO parameters, interactive test panel.
+  - `CliTab` — CLI wrapper install/uninstall and usage examples.
+  - `AutoCropTestPreviewWidget` — Inline 170-line preview class extracted to its own files.
+  - `SettingsDialog` is now a thin coordinator: creates tabs, wires `statusMessage` signals, delegates `load`/`store`/reset.
+- **MainWindow::updateQueueTable Split**: Decomposed the 116-line method into a thin loop plus `populateQueueRow` (single-row cell fill) and `rowColorForStatus` (theme-aware status colour).
+- **SettingsDialog AutoCropTab**: Moved auto-crop test preview widget and run-test logic into a self-contained tab widget.
+- **SettingsDialog CliTab**: Moved CLI install/uninstall slots and usage examples into a self-contained tab widget.
+
+### ⚙️ Technical
+
+- **New Shared Classes**: `ProcessingPipeline`, `PdfExporter`, `NaturalSorter`, `CropManager::scaleCropRect`, `MLClassifier::explainDecision`.
+- **New UI Widgets**: `ProcessingTab`, `PostProcessingTab`, `MLClassificationTab`, `AutoCropTab`, `CliTab`, `AutoCropTestPreviewWidget`.
+- **Deleted Classes**: `OptimizationManager`, `GPUAcceleration`, `PlatformDetector`, `PerformanceMonitor`.
+- **Codebase Metrics**: Net −5,100 lines (41 files changed, +2,549 / −7,640). `src/` total reduced from 25,320 to 20,297 lines (−20%). All changes are behavior-preserving.
+
+---
+
 ## [1.2.1] - 2026-05-09
 
 ### 🚀 Added

@@ -806,39 +806,32 @@ int CliRunner::runPostProcessingStage(const QString& slidesDir)
 {
     if (m_config.compatibleMode) return EXIT_OK;
 
-    PostProcessor processor;
+    ProcessingPipeline pipeline;
     m_lastPostCurrent = -1;
     m_postStage = m_phashRedundant || m_phashExclusion
         ? QStringLiteral("phash") : QStringLiteral("ml");
     m_postProcessingFailed = false;
     m_postProgressTimer.start();
 
-    connect(&processor, &PostProcessor::progressUpdated,
+    connect(&pipeline, &ProcessingPipeline::progressUpdated,
             this, &CliRunner::onPostProgressUpdated);
-    connect(&processor, &PostProcessor::imageMovedToTrash,
+    connect(&pipeline, &ProcessingPipeline::imageMovedToTrash,
             this, &CliRunner::onImageMovedToTrash);
-    connect(&processor, &PostProcessor::mlClassificationStarted,
+    connect(&pipeline, &ProcessingPipeline::mlClassificationStarted,
             this, &CliRunner::onMLClassificationStarted);
-    connect(&processor, &PostProcessor::mlClassificationFailed,
+    connect(&pipeline, &ProcessingPipeline::mlClassificationFailed,
             this, &CliRunner::onMLClassificationFailed);
 
-    PostProcessingResult result = processor.processDirectory(
-        slidesDir,
-        m_phashRedundant,
-        m_phashExclusion,
-        m_config.hammingThreshold,
-        m_exclusionList,
-        m_mlClassify,
-        m_config.mlModelPath,
-        m_config.mlNotSlideHighThreshold,
-        m_config.mlNotSlideLowThreshold,
-        m_config.mlMaybeSlideHighThreshold,
-        m_config.mlMaybeSlideLowThreshold,
-        m_config.mlSlideMaxThreshold,
-        m_config.mlDeleteMaybeSlides,
-        m_config.mlExecutionProvider,
-        /*useApplicationTrash=*/true,
-        /*baseOutputDir=*/m_outputDir);
+    ProcessingPipeline::Request request;
+    request.imageDir = slidesDir;
+    request.deleteRedundant = m_phashRedundant;
+    request.compareExcluded = m_phashExclusion;
+    request.enableML = m_mlClassify;
+    request.exclusionList = m_exclusionList;
+    request.useApplicationTrash = true;
+    request.baseOutputDir = m_outputDir;
+
+    PostProcessingResult result = pipeline.runPostProcessing(request, m_config);
 
     if (m_jsonMode) {
         QJsonObject obj;

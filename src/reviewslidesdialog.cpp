@@ -6,7 +6,9 @@
 #include "cropimageview.h"
 #include "autocropdetector.h"
 #include "postprocessor.h"
+#include "processingpipeline.h"
 #include "configmanager.h"
+#include "naturalsorter.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -21,7 +23,6 @@
 #include <QRegularExpression>
 #include <QDebug>
 #include <algorithm>
-#include <cmath>
 
 ReviewSlidesDialog::ReviewSlidesDialog(const QString& baseOutputDir,
                                        bool emptyTrashToSystemTrash,
@@ -360,17 +361,14 @@ QStringList ReviewSlidesDialog::enumerateAllFolderNames() const
     }
 
     for (const TrashEntry& entry : m_allEntries) {
-        QString folderName = entry.originalFolder;
-        if (folderName.isEmpty()) {
-            folderName = QString("slides_%1").arg(entry.videoName);
-        }
+        QString folderName = folderNameForEntry(entry);
         if (!folderName.isEmpty()) {
             folderSet.insert(folderName);
         }
     }
 
     QStringList result = folderSet.values();
-    naturalSort(result);
+    NaturalSorter::sort(result);
     return result;
 }
 
@@ -390,11 +388,7 @@ int ReviewSlidesDialog::countRemovedInFolder(const QString& folderName) const
 {
     int count = 0;
     for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == folderName) {
+        if (folderNameForEntry(entry) == folderName) {
             count++;
         }
     }
@@ -422,6 +416,33 @@ void ReviewSlidesDialog::loadCropEntries()
 {
     QString cropDir = CropManager::cropDirectory(m_baseOutputDir);
     m_allCropEntries = CropMetadata::getEntries(cropDir);
+}
+
+QString ReviewSlidesDialog::folderNameForEntry(const TrashEntry& entry)
+{
+    if (!entry.originalFolder.isEmpty()) {
+        return entry.originalFolder;
+    }
+    return QString("slides_%1").arg(entry.videoName);
+}
+
+void ReviewSlidesDialog::rebuildCurrentFolderRemoved()
+{
+    m_currentFolderRemoved.clear();
+    for (const TrashEntry& entry : m_allEntries) {
+        if (folderNameForEntry(entry) == m_currentFolderName) {
+            m_currentFolderRemoved.append(entry);
+        }
+    }
+}
+
+void ReviewSlidesDialog::reloadCurrentFolderItems()
+{
+    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
+    m_allEntries = TrashMetadata::getEntries(trashDir);
+    loadCropEntries();
+    rebuildCurrentFolderRemoved();
+    loadFolderItems();
 }
 
 bool ReviewSlidesDialog::isLivePathCropped(const QString& livePath, CropEntry* outEntry) const
@@ -573,20 +594,7 @@ void ReviewSlidesDialog::onRefreshImages()
     if (m_currentFolderName.isEmpty()) return;
 
     // Re-scan trash metadata + crop metadata + folder grid for this folder.
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
 }
 
 void ReviewSlidesDialog::onEmptyTrashFolders()
@@ -692,16 +700,7 @@ void ReviewSlidesDialog::enterImagesPage(const QString& folderName)
     m_currentFolderName = folderName;
     setWindowTitle(QString("Slides Review — %1").arg(stripSlidesPrefix(folderName)));
 
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == folderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
+    rebuildCurrentFolderRemoved();
 
     m_stack->setCurrentIndex(1);
     loadFolderItems();
@@ -760,7 +759,7 @@ void ReviewSlidesDialog::loadFolderItems()
     }
 
     std::sort(items.begin(), items.end(), [](const UnifiedItem& a, const UnifiedItem& b) {
-        return naturalLessThan(a.sortKey, b.sortKey);
+        return NaturalSorter::lessThan(a.sortKey, b.sortKey);
     });
 
     for (const UnifiedItem& item : items) {
@@ -985,20 +984,7 @@ void ReviewSlidesDialog::onRestoreSelected()
     }
 
     // Reload trash data and rebuild current folder grid
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
 }
 
 void ReviewSlidesDialog::onDeleteSelected()
@@ -1038,20 +1024,7 @@ void ReviewSlidesDialog::onDeleteSelected()
         emit filesDeleted(successCount);
     }
 
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
 }
 
 void ReviewSlidesDialog::onEmptyTrashCurrentFolder()
@@ -1078,20 +1051,7 @@ void ReviewSlidesDialog::onEmptyTrashCurrentFolder()
         emit statusMessage("No items removed from trash");
     }
 
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
 }
 
 // ==================== Viewer page ====================
@@ -1168,21 +1128,7 @@ void ReviewSlidesDialog::onViewerBack()
 {
     if (m_viewerSelecting) return; // Should not be reachable when selecting (button disabled).
     // Refresh metadata + folder grid so any thumbnail changes (cropped image + badge) show up.
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
     m_stack->setCurrentIndex(1);
     setWindowTitle(QString("Slides Review — %1").arg(stripSlidesPrefix(m_currentFolderName)));
 }
@@ -1369,18 +1315,8 @@ void ReviewSlidesDialog::onApplyBaseline()
         QPixmap targetPix(livePath);
         if (targetPix.isNull()) continue;
 
-        QSize targetSize = targetPix.size();
-        double sx = static_cast<double>(targetSize.width()) / m_baselineSourceSize.width();
-        double sy = static_cast<double>(targetSize.height()) / m_baselineSourceSize.height();
-
-        QRect scaledRect(
-            static_cast<int>(std::round(m_baselineRectImagePx.x() * sx)),
-            static_cast<int>(std::round(m_baselineRectImagePx.y() * sy)),
-            static_cast<int>(std::round(m_baselineRectImagePx.width() * sx)),
-            static_cast<int>(std::round(m_baselineRectImagePx.height() * sy))
-        );
-
-        scaledRect = scaledRect.intersected(QRect(0, 0, targetSize.width(), targetSize.height()));
+        QRect scaledRect = CropManager::scaleCropRect(
+            m_baselineRectImagePx, m_baselineSourceSize, targetPix.size());
         if (scaledRect.isEmpty()) continue;
 
         if (CropManager::applyCrop(livePath, m_baseOutputDir, scaledRect, m_jpegQuality)) {
@@ -1469,20 +1405,7 @@ void ReviewSlidesDialog::onAutoCropSelected()
     // Reload trash metadata + current-folder removed list so any items that were
     // restored out of trash disappear from the grid (otherwise stale entries would
     // render as "no preview" alongside the new extracted thumbnails).
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
 }
 
 void ReviewSlidesDialog::onRestoreCropSelected()
@@ -1536,46 +1459,24 @@ void ReviewSlidesDialog::onRemoveDuplicates()
     ConfigManager cfg;
     const AppConfig appCfg = cfg.loadConfig();
 
-    // Reuse processDirectory with only the duplicate phase enabled. The ML
-    // threshold defaults are unused because enableMLClassification is false.
-    PostProcessor processor;
-    PostProcessingResult result = processor.processDirectory(
-        folder.absolutePath(),
-        /*deleteRedundant=*/ true,
-        /*compareExcluded=*/ false,
-        appCfg.hammingThreshold,
-        /*exclusionList=*/ {},
-        /*enableMLClassification=*/ false,
-        /*mlModelPath=*/ QString(),
-        /*mlNotSlideHigh=*/ 0.9f,
-        /*mlNotSlideLow=*/ 0.75f,
-        /*mlMaybeSlideHigh=*/ 0.9f,
-        /*mlMaybeSlideLow=*/ 0.75f,
-        /*mlSlideMax=*/ 0.25f,
-        /*mlDeleteMaybeSlides=*/ true,
-        /*mlExecutionProvider=*/ "Auto",
-        /*useApplicationTrash=*/ true,
-        m_baseOutputDir);
+    // Run only the pHash duplicate phase through the shared pipeline. ML stays
+    // off, so the ML thresholds carried in appCfg are ignored.
+    ProcessingPipeline pipeline;
+    ProcessingPipeline::Request request;
+    request.imageDir = folder.absolutePath();
+    request.deleteRedundant = true;
+    request.compareExcluded = false;
+    request.enableML = false;
+    request.useApplicationTrash = true;
+    request.baseOutputDir = m_baseOutputDir;
+    PostProcessingResult result = pipeline.runPostProcessing(request, appCfg);
 
     emit statusMessage(QString("Remove Duplicate: %1 of %2 slides moved to trash (Hamming ≤ %3)")
                        .arg(result.removedByPHash).arg(names.size()).arg(appCfg.hammingThreshold));
 
     // Reload trash metadata + current-folder removed list, then refresh the grid
     // so newly-trashed items appear and the extracted thumbnails disappear.
-    QString trashDir = TrashManager::getTrashDirectory(m_baseOutputDir);
-    m_allEntries = TrashMetadata::getEntries(trashDir);
-    loadCropEntries();
-    m_currentFolderRemoved.clear();
-    for (const TrashEntry& entry : m_allEntries) {
-        QString entryFolder = entry.originalFolder;
-        if (entryFolder.isEmpty()) {
-            entryFolder = QString("slides_%1").arg(entry.videoName);
-        }
-        if (entryFolder == m_currentFolderName) {
-            m_currentFolderRemoved.append(entry);
-        }
-    }
-    loadFolderItems();
+    reloadCurrentFolderItems();
 }
 
 void ReviewSlidesDialog::updateBaselineButtonState()
@@ -1615,157 +1516,3 @@ void ReviewSlidesDialog::refreshWindowTitleForCurrentPage()
 
 // ==================== Natural sorting (duplicated from PdfMakerDialog) ====================
 
-static QList<QVariant> tokenizeForReviewSort(const QString& str)
-{
-    QList<QVariant> tokens;
-    QString currentText;
-    int i = 0;
-
-    static QMap<QChar, int> weekdayMap = {
-        {QChar(0x4E00), 1},
-        {QChar(0x4E8C), 2},
-        {QChar(0x4E09), 3},
-        {QChar(0x56DB), 4},
-        {QChar(0x4E94), 5},
-        {QChar(0x516D), 6},
-        {QChar(0x65E5), 7},
-    };
-
-    static QMap<QString, int> englishWeekdayMap = {
-        {"monday", 1}, {"mon", 1},
-        {"tuesday", 2}, {"tue", 2}, {"tues", 2},
-        {"wednesday", 3}, {"wed", 3},
-        {"thursday", 4}, {"thu", 4}, {"thur", 4}, {"thurs", 4},
-        {"friday", 5}, {"fri", 5},
-        {"saturday", 6}, {"sat", 6},
-        {"sunday", 7}, {"sun", 7},
-    };
-
-    static QMap<QString, int> monthMap = {
-        {"january", 1}, {"jan", 1},
-        {"february", 2}, {"feb", 2},
-        {"march", 3}, {"mar", 3},
-        {"april", 4}, {"apr", 4},
-        {"may", 5},
-        {"june", 6}, {"jun", 6},
-        {"july", 7}, {"jul", 7},
-        {"august", 8}, {"aug", 8},
-        {"september", 9}, {"sep", 9}, {"sept", 9},
-        {"october", 10}, {"oct", 10},
-        {"november", 11}, {"nov", 11},
-        {"december", 12}, {"dec", 12},
-    };
-
-    while (i < str.length()) {
-        if (i + 2 < str.length() &&
-            str.mid(i, 2) == QString::fromUtf8("星期")) {
-            if (!currentText.isEmpty()) {
-                tokens.append(currentText);
-                currentText.clear();
-            }
-            tokens.append(QString::fromUtf8("星期"));
-
-            QChar weekdayChar = str.at(i + 2);
-            if (weekdayMap.contains(weekdayChar)) {
-                tokens.append(weekdayMap[weekdayChar]);
-                i += 3;
-                continue;
-            }
-        }
-
-        if (str.at(i).isDigit()) {
-            if (!currentText.isEmpty()) {
-                tokens.append(currentText);
-                currentText.clear();
-            }
-            QString numStr;
-            while (i < str.length() && str.at(i).isDigit()) {
-                numStr += str.at(i);
-                ++i;
-            }
-            tokens.append(numStr.toInt());
-            continue;
-        }
-
-        if (str.at(i).isLetter()) {
-            QString word;
-            while (i < str.length() && str.at(i).isLetter()) {
-                word += str.at(i);
-                ++i;
-            }
-            QString lowerWord = word.toLower();
-            if (englishWeekdayMap.contains(lowerWord)) {
-                if (!currentText.isEmpty()) {
-                    tokens.append(currentText);
-                    currentText.clear();
-                }
-                tokens.append(QString("__weekday__"));
-                tokens.append(englishWeekdayMap[lowerWord]);
-                continue;
-            }
-            if (monthMap.contains(lowerWord)) {
-                if (!currentText.isEmpty()) {
-                    tokens.append(currentText);
-                    currentText.clear();
-                }
-                tokens.append(QString("__month__"));
-                tokens.append(monthMap[lowerWord]);
-                continue;
-            }
-            currentText += word;
-            continue;
-        }
-
-        currentText += str.at(i);
-        ++i;
-    }
-
-    if (!currentText.isEmpty()) {
-        tokens.append(currentText);
-    }
-
-    return tokens;
-}
-
-bool ReviewSlidesDialog::naturalLessThan(const QString& a, const QString& b)
-{
-    QList<QVariant> tokensA = tokenizeForReviewSort(a);
-    QList<QVariant> tokensB = tokenizeForReviewSort(b);
-
-    int len = qMin(tokensA.size(), tokensB.size());
-    for (int i = 0; i < len; ++i) {
-        const QVariant& va = tokensA[i];
-        const QVariant& vb = tokensB[i];
-
-        if (va.typeId() == QMetaType::Int && vb.typeId() == QMetaType::Int) {
-            if (va.toInt() != vb.toInt()) {
-                return va.toInt() < vb.toInt();
-            }
-            continue;
-        }
-
-        if (va.typeId() == QMetaType::QString && vb.typeId() == QMetaType::QString) {
-            QString sa = va.toString();
-            QString sb = vb.toString();
-            int cmp = QString::localeAwareCompare(sa, sb);
-            if (cmp != 0) {
-                return cmp < 0;
-            }
-            continue;
-        }
-
-        if (va.typeId() == QMetaType::Int) {
-            return true;
-        }
-        if (vb.typeId() == QMetaType::Int) {
-            return false;
-        }
-    }
-
-    return tokensA.size() < tokensB.size();
-}
-
-void ReviewSlidesDialog::naturalSort(QStringList& list)
-{
-    std::sort(list.begin(), list.end(), naturalLessThan);
-}

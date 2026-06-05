@@ -189,6 +189,69 @@ bool MLClassifier::shouldKeepImage(const ClassificationResult& result,
     return true;
 }
 
+QStringList MLClassifier::explainDecision(const ClassificationResult& result,
+                                          const CategoryThresholds& notSlideThresholds,
+                                          const CategoryThresholds& maybeSlideThresholds,
+                                          float slideMaxThreshold,
+                                          bool deleteMaybeSlides) {
+    QStringList lines;
+
+    const bool shouldKeep = shouldKeepImage(result, notSlideThresholds,
+                                            maybeSlideThresholds, slideMaxThreshold,
+                                            deleteMaybeSlides);
+    if (shouldKeep) {
+        lines << "[KEEP] This image would be KEPT";
+    } else {
+        lines << "[REMOVE] This image would be MOVED TO TRASH";
+    }
+
+    lines << "";
+    lines << "REASON:";
+
+    const float slideProb = result.classProbabilities.value(PREFIX_SLIDE, 0.0f);
+    const float conf = result.confidence;
+
+    // Shared 2-stage explanation for not_slide / may_be_slide categories.
+    auto explainTwoStage = [&](const CategoryThresholds& thresholds) {
+        if (conf >= thresholds.highThreshold) {
+            lines << QString("  - High confidence: %1 >= %2 (high threshold)")
+                         .arg(conf, 0, 'f', 4).arg(thresholds.highThreshold, 0, 'f', 2);
+            lines << "  - Removed immediately (Stage 1)";
+        } else if (conf >= thresholds.lowThreshold) {
+            lines << QString("  - Medium confidence: %1 in [%2, %3)")
+                         .arg(conf, 0, 'f', 4)
+                         .arg(thresholds.lowThreshold, 0, 'f', 2)
+                         .arg(thresholds.highThreshold, 0, 'f', 2);
+            if (slideProb <= slideMaxThreshold) {
+                lines << QString("  - Slide prob %1 <= %2 (slide_max) -> Removed (Stage 2)")
+                             .arg(slideProb, 0, 'f', 4).arg(slideMaxThreshold, 0, 'f', 2);
+            } else {
+                lines << QString("  - Slide prob %1 > %2 (slide_max) -> Kept (Stage 2 failed)")
+                             .arg(slideProb, 0, 'f', 4).arg(slideMaxThreshold, 0, 'f', 2);
+            }
+        } else {
+            lines << QString("  - Low confidence: %1 < %2 (low threshold)")
+                         .arg(conf, 0, 'f', 4).arg(thresholds.lowThreshold, 0, 'f', 2);
+            lines << "  - Kept by default";
+        }
+    };
+
+    if (result.predictedClass == PREFIX_SLIDE) {
+        lines << "  - Classified as 'slide' (always kept)";
+    } else if (result.predictedClass.startsWith(PREFIX_NOT_SLIDE)) {
+        explainTwoStage(notSlideThresholds);
+    } else if (result.predictedClass.startsWith(PREFIX_MAYBE_SLIDE)) {
+        if (!deleteMaybeSlides) {
+            lines << "  - 'Delete may_be_slide images' is DISABLED";
+            lines << "  - Kept regardless of confidence";
+        } else {
+            explainTwoStage(maybeSlideThresholds);
+        }
+    }
+
+    return lines;
+}
+
 QStringList MLClassifier::getClassPrefixes() {
     return {PREFIX_SLIDE, "not_slide", "may_be_slide"};
 }
