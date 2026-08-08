@@ -1,14 +1,20 @@
 {
   "name": "autoslides-extractor",
-  "version": "1.2.2",
+  "version": "2.0.0",
   "description": "AutoSlides Extractor - Extract slides from video presentations using advanced image processing",
   "homepage": "https://github.com/bit-admin/AutoSlidesQt",
   "dependencies": [
     {
-      "name": "opencv"
+      "name": "opencv4",
+      "default-features": false,
+      "features": [
+        "jpeg",
+        "png"
+      ]
     },
     {
       "name": "ffmpeg",
+      "default-features": false,
       "features": [
         "avcodec",
         "avformat",

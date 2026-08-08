@@ -21,7 +21,7 @@ PostProcessingResult ProcessingPipeline::runPostProcessing(const Request& reques
     connect(&processor, &PostProcessor::mlClassificationFailed,
             this, &ProcessingPipeline::mlClassificationFailed);
 
-    // The single place the ~16-argument processDirectory call is assembled.
+    // The single place the processDirectory call is assembled from Request + AppConfig.
     return processor.processDirectory(
         request.imageDir,
         request.deleteRedundant,
@@ -38,5 +38,9 @@ PostProcessingResult ProcessingPipeline::runPostProcessing(const Request& reques
         config.mlDeleteMaybeSlides,
         config.mlExecutionProvider,
         request.useApplicationTrash,
-        request.baseOutputDir);
+        request.baseOutputDir,
+        config.mlAutoCropMaybeSlides,
+        config.mlPostCropDedup,
+        config.autoCrop,
+        config.jpegQuality);
 }

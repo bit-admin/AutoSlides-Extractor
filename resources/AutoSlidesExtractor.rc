@@ -5,8 +5,8 @@ IDI_ICON1 ICON "icon.ico"
 
 // Version information
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1,2,1,0
-PRODUCTVERSION 1,2,1,0
+FILEVERSION 2,0,0,0
+PRODUCTVERSION 2,0,0,0
 FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
 FILEFLAGS 0x0L
 FILEOS VOS__WINDOWS32
@@ -19,12 +19,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "AutoSlides Project"
             VALUE "FileDescription", "AutoSlides Extractor - Extract slides from video presentations"
-            VALUE "FileVersion", "1.2.2"
+            VALUE "FileVersion", "2.0.0"
             VALUE "InternalName", "AutoSlidesExtractor"
             VALUE "LegalCopyright", "Copyright © 2025 AutoSlides Project. All rights reserved."
             VALUE "OriginalFilename", "AutoSlidesExtractor.exe"
             VALUE "ProductName", "AutoSlides Extractor"
-            VALUE "ProductVersion", "1.2.2"
+            VALUE "ProductVersion", "2.0.0"
         END
     END
     BLOCK "VarFileInfo"

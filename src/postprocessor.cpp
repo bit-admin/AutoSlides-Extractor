@@ -1,9 +1,14 @@
 #include "postprocessor.h"
 #include "trashmanager.h"
+#include "timelinemetadata.h"
 #include "mlclassifier.h"
+#include "autocropdetector.h"
+#include "cropmanager.h"
 #include <QDir>
 #include <QFileInfo>
+#include <QSet>
 #include <QDebug>
+#include <memory>
 
 PostProcessor::PostProcessor(QObject *parent)
     : QObject(parent), m_totalProcessed(0)
@@ -25,7 +30,11 @@ PostProcessingResult PostProcessor::processDirectory(const QString& imageDir,
                                                     bool mlDeleteMaybeSlides,
                                                     const QString& mlExecutionProvider,
                                                     bool useApplicationTrash,
-                                                    const QString& baseOutputDir)
+                                                    const QString& baseOutputDir,
+                                                    bool mlAutoCropMaybeSlides,
+                                                    bool mlPostCropDedup,
+                                                    const AutoCropConfig& autoCropConfig,
+                                                    int jpegQuality)
 {
     m_movedToTrash.clear();
     m_totalProcessed = 0;
@@ -80,6 +89,8 @@ PostProcessingResult PostProcessor::processDirectory(const QString& imageDir,
         }
     }
 
+    QStringList autoCroppedKept;
+
     // ML classification if enabled
     if (enableMLClassification && MLClassifier::isAvailable()) {
         QStringList mlRemoved = classifyAndRemove(imageHashes, mlModelPath,
@@ -89,9 +100,32 @@ PostProcessingResult PostProcessor::processDirectory(const QString& imageDir,
                                                   mlMaybeSlideLowThreshold,
                                                   mlSlideMaxThreshold,
                                                   mlDeleteMaybeSlides,
-                                                  mlExecutionProvider, useApplicationTrash, baseOutputDir);
+                                                  mlExecutionProvider,
+                                                  useApplicationTrash,
+                                                  baseOutputDir,
+                                                  mlAutoCropMaybeSlides,
+                                                  autoCropConfig,
+                                                  jpegQuality,
+                                                  &autoCroppedKept);
         m_movedToTrash.append(mlRemoved);
         result.removedByML = mlRemoved.size();
+        result.autoCroppedKept = autoCroppedKept.size();
+
+        // Drop trashed paths from the hash map (auto-cropped kept stay — hashes are
+        // stale for those; post-crop dedup rehashes candidates from disk).
+        for (const QString& file : mlRemoved) {
+            imageHashes.remove(file);
+        }
+    }
+
+    // Candidate-only pHash after successful auto-crops (post-crop pixels).
+    if (mlPostCropDedup && !autoCroppedKept.isEmpty()) {
+        QStringList postCropDupes = removePostCropDuplicates(
+            imageDir, autoCroppedKept, imageHashes, hammingThreshold,
+            useApplicationTrash, baseOutputDir);
+        m_movedToTrash.append(postCropDupes);
+        result.removedByPHash += postCropDupes.size();
+        result.removedByPostCropPHash = postCropDupes.size();
     }
 
     result.totalRemoved = m_movedToTrash.size();
@@ -163,6 +197,11 @@ QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint
                 if (success) {
                     movedFiles.append(file2);
                     emit imageMovedToTrash(file2, QString("Duplicate (distance: %1)").arg(distance));
+                    // Keep event; re-link later span to first-kept basename
+                    TimelineMetadata::markDuplicate(
+                        QFileInfo(file2).absolutePath(),
+                        QFileInfo(file2).fileName(),
+                        QFileInfo(file1).fileName());
                 }
             }
         }
@@ -206,6 +245,10 @@ QStringList PostProcessor::removeExcluded(const QMap<QString, std::vector<uint8_
                 if (success) {
                     movedFiles.append(filePath);
                     emit imageMovedToTrash(filePath, reason);
+                    TimelineMetadata::markGap(
+                        QFileInfo(filePath).absolutePath(),
+                        QFileInfo(filePath).fileName(),
+                        QStringLiteral("exclusion"));
                 }
                 break;  // No need to check other exclusion entries
             }
@@ -225,7 +268,11 @@ QStringList PostProcessor::classifyAndRemove(const QMap<QString, std::vector<uin
                                             bool mlDeleteMaybeSlides,
                                             const QString& mlExecutionProvider,
                                             bool useApplicationTrash,
-                                            const QString& baseOutputDir)
+                                            const QString& baseOutputDir,
+                                            bool mlAutoCropMaybeSlides,
+                                            const AutoCropConfig& autoCropConfig,
+                                            int jpegQuality,
+                                            QStringList* outAutoCroppedKept)
 {
     QStringList movedFiles;
 
@@ -268,6 +315,13 @@ QStringList PostProcessor::classifyAndRemove(const QMap<QString, std::vector<uin
     // Classify all images
     QVector<ClassificationResult> results = classifier.classifyBatch(imagePaths);
 
+    // Lazy detector: only built if we actually try auto-crop on a may_be_slide.
+    std::unique_ptr<AutoCropDetector> autoCropDetector;
+    const bool canAutoCrop = mlAutoCropMaybeSlides
+                             && mlDeleteMaybeSlides
+                             && !baseOutputDir.isEmpty()
+                             && QDir(baseOutputDir).exists();
+
     // Process results and remove unwanted images
     for (const ClassificationResult& result : results) {
         if (result.error) {
@@ -284,43 +338,192 @@ QStringList PostProcessor::classifyAndRemove(const QMap<QString, std::vector<uin
                                                         maybeSlideThresholds, mlSlideMaxThreshold,
                                                         mlDeleteMaybeSlides);
 
-        if (!shouldKeep) {
-            // Move to trash
-            bool success = false;
-            QString reason = QString("ML: %1 (confidence: %2)")
-                                .arg(result.predictedClass)
-                                .arg(result.confidence, 0, 'f', 3);
+        if (shouldKeep) {
+            continue;
+        }
 
-            QString category;
-            if (result.predictedClass.startsWith("not_slide")) {
-                category = "ml_not_slide";
-            } else if (result.predictedClass.startsWith("may_be_slide")) {
-                category = "ml_maybe_slide";
+        const bool isMaybeSlide = result.predictedClass.startsWith(QLatin1String("may_be_slide"));
+
+        // Try in-place auto-crop for may_be_slide before trashing (Review Auto Crop spirit).
+        if (isMaybeSlide && canAutoCrop) {
+            if (!autoCropDetector) {
+                autoCropDetector = std::make_unique<AutoCropDetector>(autoCropConfig);
             }
-
-            if (useApplicationTrash) {
-                success = TrashManager::moveToApplicationTrash(result.imagePath, baseOutputDir, "ml",
-                                                              category, reason);
-            } else {
-                success = TrashManager::renameAndMoveToTrash(result.imagePath, "slideRemoved_ml_");
+            AutoCropResult ac = autoCropDetector->detect(result.imagePath);
+            if (ac.isValid()
+                && CropManager::applyCrop(result.imagePath, baseOutputDir, ac.bbox,
+                                          jpegQuality, /*autoCropped=*/true)) {
+                if (outAutoCroppedKept) {
+                    outAutoCroppedKept->append(result.imagePath);
+                }
+                qInfo() << "PostProcessor: Auto-cropped and kept"
+                        << QFileInfo(result.imagePath).fileName()
+                        << "- classified as" << result.predictedClass
+                        << "with confidence" << result.confidence
+                        << "bbox" << ac.bbox;
+                continue; // keep live file
             }
+            qInfo() << "PostProcessor: Auto-crop failed for"
+                    << QFileInfo(result.imagePath).fileName()
+                    << "- falling back to trash"
+                    << (ac.errorMessage.isEmpty() ? QString() : ac.errorMessage);
+        }
 
-            if (success) {
-                movedFiles.append(result.imagePath);
-                emit imageMovedToTrash(result.imagePath,
-                    QString("ML: %1 (confidence: %2)")
-                        .arg(result.predictedClass)
-                        .arg(result.confidence, 0, 'f', 3));
+        // Move to trash
+        bool success = false;
+        QString reason = QString("ML: %1 (confidence: %2)")
+                            .arg(result.predictedClass)
+                            .arg(result.confidence, 0, 'f', 3);
 
-                qInfo() << "PostProcessor: Removed" << QFileInfo(result.imagePath).fileName()
-                       << "- classified as" << result.predictedClass
-                       << "with confidence" << result.confidence;
-            }
+        QString category;
+        if (result.predictedClass.startsWith("not_slide")) {
+            category = "ml_not_slide";
+        } else if (isMaybeSlide) {
+            category = "ml_maybe_slide";
+        }
+
+        if (useApplicationTrash) {
+            success = TrashManager::moveToApplicationTrash(result.imagePath, baseOutputDir, "ml",
+                                                           category, reason);
+        } else {
+            success = TrashManager::renameAndMoveToTrash(result.imagePath, "slideRemoved_ml_");
+        }
+
+        if (success) {
+            movedFiles.append(result.imagePath);
+            emit imageMovedToTrash(result.imagePath,
+                QString("ML: %1 (confidence: %2)")
+                    .arg(result.predictedClass)
+                    .arg(result.confidence, 0, 'f', 3));
+            TimelineMetadata::markGap(
+                QFileInfo(result.imagePath).absolutePath(),
+                QFileInfo(result.imagePath).fileName(),
+                QStringLiteral("ai_filtered"));
+
+            qInfo() << "PostProcessor: Removed" << QFileInfo(result.imagePath).fileName()
+                   << "- classified as" << result.predictedClass
+                   << "with confidence" << result.confidence;
         }
     }
 
     qInfo() << "PostProcessor: ML classification complete -" << movedFiles.size()
-           << "images removed out of" << imagePaths.size();
+           << "images removed out of" << imagePaths.size()
+           << ";" << (outAutoCroppedKept ? outAutoCroppedKept->size() : 0)
+           << "auto-cropped and kept";
+
+    return movedFiles;
+}
+
+QStringList PostProcessor::removePostCropDuplicates(const QString& imageDir,
+                                                    const QStringList& autoCroppedKept,
+                                                    const QMap<QString, std::vector<uint8_t>>& priorHashes,
+                                                    int hammingThreshold,
+                                                    bool useApplicationTrash,
+                                                    const QString& baseOutputDir)
+{
+    QStringList movedFiles;
+
+    if (autoCroppedKept.isEmpty()) {
+        return movedFiles;
+    }
+
+    QDir dir(imageDir);
+    QStringList filters;
+    filters << "*.jpg" << "*.jpeg" << "*.png" << "*.bmp";
+    QStringList remaining = dir.entryList(filters, QDir::Files, QDir::Name);
+    for (QString& f : remaining) {
+        f = dir.absoluteFilePath(f);
+    }
+
+    QSet<QString> candidateSet(autoCroppedKept.begin(), autoCroppedKept.end());
+
+    // Candidates still on disk, stable name order (entryList already Name-sorted).
+    QStringList candidates;
+    QStringList otherActive;
+    for (const QString& path : remaining) {
+        if (candidateSet.contains(path)) {
+            candidates.append(path);
+        } else {
+            otherActive.append(path);
+        }
+    }
+
+    if (candidates.isEmpty()) {
+        return movedFiles;
+    }
+
+    // Seed seen hashes from non-candidate remaining slides. Prefer stage-1 hashes
+    // (uncropped pixels still match for those files).
+    struct SeenEntry {
+        QString path;
+        std::vector<uint8_t> hash;
+    };
+    QList<SeenEntry> seen;
+    seen.reserve(otherActive.size() + candidates.size());
+
+    for (const QString& path : otherActive) {
+        std::vector<uint8_t> hash;
+        if (priorHashes.contains(path) && !priorHashes.value(path).empty()) {
+            hash = priorHashes.value(path);
+        } else {
+            hash = PHashCalculator::calculatePHash(path);
+        }
+        if (!hash.empty()) {
+            seen.append({path, std::move(hash)});
+        }
+    }
+
+    for (const QString& candPath : candidates) {
+        // Must rehash: live pixels were rewritten by applyCrop.
+        std::vector<uint8_t> candHash = PHashCalculator::calculatePHash(candPath);
+        if (candHash.empty()) {
+            qWarning() << "PostProcessor: post-crop pHash failed for" << candPath;
+            continue;
+        }
+
+        bool isDup = false;
+        QString matchPath;
+        int matchDistance = -1;
+        for (const SeenEntry& s : seen) {
+            int distance = PHashCalculator::hammingDistance(candHash, s.hash);
+            if (distance >= 0 && distance <= hammingThreshold) {
+                isDup = true;
+                matchPath = s.path;
+                matchDistance = distance;
+                break;
+            }
+        }
+
+        if (isDup) {
+            const QString reason = QString("Duplicate of %1 (distance: %2)")
+                                       .arg(QFileInfo(matchPath).fileName())
+                                       .arg(matchDistance);
+            bool success = false;
+            if (useApplicationTrash) {
+                // Leave .extractorCrop backup/metadata intact for Review restore.
+                success = TrashManager::moveToApplicationTrash(
+                    candPath, baseOutputDir, "phash", "phash_duplicate", reason);
+            } else {
+                success = TrashManager::renameAndMoveToTrash(candPath, "slideRemoved_phash_");
+            }
+            if (success) {
+                movedFiles.append(candPath);
+                emit imageMovedToTrash(candPath, reason);
+                TimelineMetadata::markDuplicate(
+                    imageDir,
+                    QFileInfo(candPath).fileName(),
+                    QFileInfo(matchPath).fileName());
+                qInfo() << "PostProcessor: Post-crop duplicate removed"
+                        << QFileInfo(candPath).fileName() << reason;
+            }
+        } else {
+            // Earlier kept crop wins for later candidates.
+            seen.append({candPath, std::move(candHash)});
+        }
+    }
+
+    qInfo() << "PostProcessor: Post-crop pHash complete -" << movedFiles.size()
+           << "duplicates removed from" << candidates.size() << "auto-cropped candidates";
 
     return movedFiles;
 }

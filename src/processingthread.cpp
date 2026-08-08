@@ -1,5 +1,6 @@
 #include "processingthread.h"
 #include "imageiohelper.h"
+#include "timelinemetadata.h"
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -402,7 +403,10 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
         }
 
         // Define chunk callback that puts chunks into the shared queue
-        auto chunkCallback = [this](const std::vector<cv::Mat>& frames, int startOffset, bool isLastChunk) {
+        auto chunkCallback = [this](const std::vector<cv::Mat>& frames,
+                                    const std::vector<double>& timestamps,
+                                    int startOffset,
+                                    bool isLastChunk) {
             // Check for stop/pause conditions
             {
                 QMutexLocker locker(&m_mutex);
@@ -411,8 +415,8 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
                 }
             }
 
-            // Create frame chunk
-            auto chunk = std::make_unique<FrameChunk>(frames, startOffset, isLastChunk);
+            // Create frame chunk (frames + media PTS seconds)
+            auto chunk = std::make_unique<FrameChunk>(frames, timestamps, startOffset, isLastChunk);
 
             // Wait for queue to be empty (capacity = 1)
             {
@@ -554,6 +558,7 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
                 // Process chunk using slide detector
                 SlideDetectionResult result = m_slideDetector->detectSlidesFromChunk(
                     chunk->frames,
+                    chunk->timestamps,
                     m_processingState,
                     chunk->isLastChunk,
                     ssimThreshold,
@@ -575,11 +580,13 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
                 if (!result.selectedSlideIndices.empty()) {
                     // Convert global indices to local indices for frame access
                     std::vector<cv::Mat> selectedFrames;
+                    std::vector<int> selectedGlobalIndices;
                     for (int globalIndex : result.selectedSlideIndices) {
                         // Convert global index to local index within current chunk
                         int localIndex = globalIndex - chunk->startOffset;
                         if (localIndex >= 0 && localIndex < static_cast<int>(chunk->frames.size())) {
                             selectedFrames.push_back(chunk->frames[localIndex]);
+                            selectedGlobalIndices.push_back(globalIndex);
                         }
                     }
 
@@ -602,6 +609,19 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
                         if (!ImageIOHelper::imwriteUnicode(filePath, selectedFrames[i], compression_params)) {
                             QString errorMsg = QString("Failed to save slide: %1").arg(filePath);
                             emit videoInfoLogged(videoIndex, errorMsg);
+                        } else if (m_config.writeTimeline) {
+                            // Match confirmed timing for this global index (parallel to selected indices)
+                            double changeAt = 0.0;
+                            double confirmedAt = 0.0;
+                            const int gIdx = selectedGlobalIndices[i];
+                            for (const ConfirmedSlideTiming& t : result.confirmedSlideTimings) {
+                                if (t.globalIndex == gIdx) {
+                                    changeAt = t.changeAt;
+                                    confirmedAt = t.confirmedAt;
+                                    break;
+                                }
+                            }
+                            TimelineMetadata::addConfirmedCapture(outputDir, changeAt, confirmedAt, fileName);
                         }
                     }
                 }

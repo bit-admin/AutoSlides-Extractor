@@ -74,15 +74,21 @@ public:
 
     /**
      * Chunk ready callback function type for chunk-based processing
-     * Parameters: frames_vector, start_offset, is_last_chunk
+     * Parameters: frames_vector, timestamps_seconds (parallel), start_offset, is_last_chunk
      */
-    using ChunkReadyCallback = std::function<void(const std::vector<cv::Mat>&, int startOffset, bool isLastChunk)>;
+    using ChunkReadyCallback = std::function<void(const std::vector<cv::Mat>&,
+                                                  const std::vector<double>&,
+                                                  int startOffset,
+                                                  bool isLastChunk)>;
 
     /**
      * Optimized chunk ready callback function type using FrameBuffer
-     * Parameters: frame_buffers_vector, start_offset, is_last_chunk
+     * Parameters: frame_buffers_vector, timestamps_seconds (parallel), start_offset, is_last_chunk
      */
-    using OptimizedChunkReadyCallback = std::function<void(std::vector<FrameBuffer>&&, int startOffset, bool isLastChunk)>;
+    using OptimizedChunkReadyCallback = std::function<void(std::vector<FrameBuffer>&&,
+                                                           std::vector<double>&&,
+                                                           int startOffset,
+                                                           bool isLastChunk)>;
 
     HardwareDecoder();
     ~HardwareDecoder();

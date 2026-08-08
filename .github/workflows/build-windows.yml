@@ -1,335 +1,732 @@
+# Build + package AutoSlides Extractor for Windows (portable ZIP + NSIS).
+#
+# Intentionally gitignored in the private tree; mirrored to a public repo for CI.
+# Packaging philosophy matches package-macos.sh:
+#   - discover deps from the built binary (no hardcoded OpenCV 4.x names)
+#   - fail hard on missing critical DLLs
+#   - verify with --version only (no extract / no temp-tree copies)
+#   - version comes from CMakeLists.txt, not a stale constant
+#
+# Artifacts:
+#   AutoSlides.Extractor-<ver>-Windows-x64-Portable.zip
+#   AutoSlides.Extractor-<ver>-Windows-x64-Setup.exe
+# Draft release (push/workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
+#
+# Caching strategy (restore early, SAVE right after each success):
+#   - Qt: install-qt-action (qtbase + qtsvg)
+#   - vcpkg tool (C:/vcpkg), vcpkg-bincache (prebuilt packages), ONNX vendor,
+#     NSIS: actions/cache/restore + actions/cache/save (survives later failures)
+#   - vcpkg x-gha: per-package upload during install (second layer)
+#   - NOT cached (by design): build/vcpkg_installed, buildtrees, app .obj —
+#     reinstall from bincache is fast; trees are path-sensitive / huge
+#
+# First cold run still compiles FFmpeg/OpenCV (30–90+ min). After a successful
+# "Install vcpkg dependencies" step, that work is cached even if package fails.
+# vcpkg-bin key includes MSVC FileVersion so ABI stays consistent.
+
 name: Build Windows Release
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: windows-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Do NOT cancel an in-progress first-time vcpkg compile — that throws away
+  # half-built binary-cache uploads and forces another full ffmpeg build.
+  cancel-in-progress: false
+
+permissions:
+  # contents:write required for softprops/action-gh-release when using github.token
+  # (create tag/release + generate release notes). PAT still preferred via `token:`.
+  contents: write
+  # x-gha binary cache needs to write Actions cache entries
+  actions: write
+
 env:
-  APP_VERSION: "1.2.2"
   ONNXRUNTIME_VERSION: "1.23.2"
+  # Portable build: DirectML/CPU ONNX (no CUDA redistributable).
+  ONNX_PACKAGE: "onnxruntime-win-x64"
+  # Pin vcpkg so binary-cache ABIs stay stable across runs (do not git pull master).
+  # Bump intentionally when you want newer OpenCV/FFmpeg ports.
+  VCPKG_COMMIT: "2025.04.09"
+  VCPKG_DEFAULT_TRIPLET: "x64-windows"
+  # x-gha: push/pull each package via Actions cache API as soon as it builds.
+  # files: extra local layer restored by actions/cache below.
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
 
 jobs:
   build-windows:
+    # windows-latest is fine; MSVC version is part of the vcpkg-bin cache key so
+    # toolchain drift cannot restore a wrong-ABI bincache and skip saving updates.
     runs-on: windows-latest
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v2
-
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v4
-      with:
-        version: '6.8.3'
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2022_64'
-        cache: true
-        cache-key-prefix: 'install-qt-action'
-
-    - name: Cache vcpkg
-      uses: actions/cache@v4
-      with:
-        path: |
-          C:/vcpkg/installed
-          C:/vcpkg/packages
-          C:/vcpkg/buildtrees
-          C:/Users/runneradmin/AppData/Local/vcpkg/archives
-          C:/vcpkg-cache
-          build/vcpkg_installed
-        key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-${{ hashFiles('**/CMakeLists.txt') }}-${{ runner.os }}-x64-windows
-        restore-keys: |
-          ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-${{ hashFiles('**/CMakeLists.txt') }}-
-          ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-
-          ${{ runner.os }}-vcpkg-
-
-    - name: Setup vcpkg
-      run: |
-        if (-not (Test-Path "C:/vcpkg")) {
-          Write-Host "Cloning vcpkg..."
-          git clone https://github.com/Microsoft/vcpkg.git C:/vcpkg
-        } else {
-          Write-Host "vcpkg directory exists, updating..."
-          cd C:/vcpkg
-          git pull
-        }
-        cd C:/vcpkg
-        Write-Host "Bootstrapping vcpkg..."
-        ./bootstrap-vcpkg.bat
-        Write-Host "vcpkg version:"
-        ./vcpkg version
-
-    - name: Setup vcpkg integration
-      run: |
-        Write-Host "Setting up vcpkg integration..."
-        # Enable file-based binary caching for reliability
-        $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-cache,readwrite"
-        Write-Host "Using file-based vcpkg binary caching at C:/vcpkg-cache"
-        Write-Host "Integrating vcpkg with Visual Studio..."
-        C:/vcpkg/vcpkg integrate install
-        Write-Host "Note: Dependencies will be installed automatically by CMake using vcpkg.json manifest"
-
-    - name: Download ONNX Runtime
-      run: |
-        Write-Host "Downloading ONNX Runtime for Windows with hardware acceleration..."
-        $ortVersion = $env:ONNXRUNTIME_VERSION
-
-        # Create vendor directory
-        if (-not (Test-Path "vendor")) {
-          mkdir vendor
-        }
-
-        # Download GPU version (CUDA support; DirectML is copied too if the chosen ORT package provides it)
-        $gpuUrl = "https://github.com/microsoft/onnxruntime/releases/download/v$ortVersion/onnxruntime-win-x64-gpu-$ortVersion.zip"
-        $gpuZip = "vendor/onnxruntime-win-x64-gpu-$ortVersion.zip"
-        Write-Host "Downloading GPU version from $gpuUrl"
-        Invoke-WebRequest -Uri $gpuUrl -OutFile $gpuZip -MaximumRetryCount 3 -RetryIntervalSec 5
-        Write-Host "Extracting ONNX Runtime GPU version..."
-        Expand-Archive -Path $gpuZip -DestinationPath "vendor/" -Force
-        Remove-Item $gpuZip
-
-        Write-Host "ONNX Runtime downloaded successfully"
-        Write-Host "Contents of vendor directory:"
-        ls vendor/
-
-        Write-Host "Contents of ONNX Runtime directory:"
-        ls "vendor/onnxruntime-win-x64-gpu-$ortVersion/"
-
-    - name: Configure CMake
-      run: |
-        if (-not (Test-Path "build")) {
-          mkdir build
-        }
-        cd build
-        # Enable file-based binary caching for reliability
-        $env:VCPKG_BINARY_SOURCES = "clear;files,C:/vcpkg-cache,readwrite"
-        Write-Host "Using file-based vcpkg binary caching at C:/vcpkg-cache"
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows
-
-    - name: Build
-      run: |
-        cd build
-        cmake --build . --config Release --parallel
-
-    - name: Create portable package
-      run: |
-        cd build
-        # Create or clean package directory
-        if (Test-Path "package") {
-          Remove-Item "package" -Recurse -Force
-        }
-        mkdir package
-        cp Release/AutoSlidesExtractor.exe package/
-
-        # Deploy Qt dependencies
-        windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw package/AutoSlidesExtractor.exe
-
-        # Copy vcpkg dependencies - use CMake integrated path
-        $vcpkgRoot = "D:/a/AutoSlides-Extractor/AutoSlides-Extractor/build/vcpkg_installed/x64-windows"
-        Write-Host "Copying dependencies from: $vcpkgRoot/bin"
-
-        # Debug vcpkg installation paths
-        Write-Host "Debugging vcpkg paths:"
-        Write-Host "  C:/vcpkg exists: $(Test-Path 'C:/vcpkg')"
-        Write-Host "  C:/vcpkg/installed exists: $(Test-Path 'C:/vcpkg/installed')"
-        Write-Host "  $vcpkgRoot exists: $(Test-Path $vcpkgRoot)"
-        Write-Host "  $vcpkgRoot/bin exists: $(Test-Path '$vcpkgRoot/bin')"
-
-        # Try alternative paths (primary path should be correct now)
-        $alternativePaths = @(
-          "$vcpkgRoot/bin",
-          "D:/a/AutoSlides-Extractor/AutoSlides-Extractor/build/vcpkg_installed/x64-windows/bin",
-          "C:/vcpkg/installed/x64-windows/bin"
-        )
-
-        $actualVcpkgBin = $null
-        foreach ($path in $alternativePaths) {
-          Write-Host "  Checking path: $path - $(Test-Path $path)"
-          if (Test-Path $path) {
-            $dllCount = (Get-ChildItem "$path/*.dll" -ErrorAction SilentlyContinue).Count
-            Write-Host "    Found $dllCount DLL files"
-            if ($dllCount -gt 0 -and $null -eq $actualVcpkgBin) {
-              $actualVcpkgBin = $path
-              Write-Host "    ✓ Using this path for dependencies"
-            }
+      - name: Read app version from CMakeLists.txt
+        id: version
+        run: |
+          $cm = Get-Content -Raw CMakeLists.txt
+          if ($cm -notmatch 'project\s*\(\s*AutoSlidesExtractor\s+VERSION\s+([0-9.]+)') {
+            throw "Could not parse project VERSION from CMakeLists.txt"
           }
-        }
+          $ver = $Matches[1]
+          Write-Host "APP_VERSION=$ver"
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-        if ($actualVcpkgBin) {
-          $vcpkgBinPath = $actualVcpkgBin
-          Write-Host "Using vcpkg bin path: $vcpkgBinPath"
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
-          # List available DLLs for debugging
-          Write-Host "Available DLLs in vcpkg bin directory:"
-          Get-ChildItem "$vcpkgBinPath/*.dll" | ForEach-Object { Write-Host "  $($_.Name)" }
-        } else {
-          Write-Host "  ✗ No vcpkg bin directory with DLLs found!"
-          $vcpkgBinPath = "$vcpkgRoot/bin"  # fallback to original path
-        }
+      # vcpkg package ABI includes the compiler hash. Put cl version in the cache key
+      # so a toolchain drift cannot "hit" a cache that only restores 3 host tools.
+      - name: Detect MSVC version (vcpkg cache key)
+        id: msvc
+        run: |
+          $cl = Get-Command cl.exe -ErrorAction Stop
+          $ver = $cl.FileVersionInfo.FileVersion
+          if (-not $ver) { $ver = "unknown" }
+          # Sanitize for cache key (no spaces)
+          $ver = ($ver -replace '[^0-9.]+', '-')
+          Write-Host "MSVC FileVersion=$ver path=$($cl.Source)"
+          "version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-        # Copy OpenCV DLLs with error reporting
-        Write-Host "Copying OpenCV DLLs..."
-        $opencvDlls = @("opencv_core4*.dll", "opencv_imgproc4*.dll", "opencv_imgcodecs4*.dll")
-        foreach ($dll in $opencvDlls) {
-          $files = Get-ChildItem "$vcpkgBinPath/$dll" -ErrorAction SilentlyContinue
-          if ($files) {
-            foreach ($file in $files) {
-              Copy-Item $file.FullName package/
-              Write-Host "  ✓ Copied $($file.Name)"
-            }
-          } else {
-            Write-Host "  ✗ No files found matching $dll"
-          }
-        }
+      - name: Install Qt (qtbase + qtsvg only)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: "windows"
+          target: "desktop"
+          arch: "win64_msvc2022_64"
+          # Core/Gui/Widgets live in qtbase; qtsvg covers optional icon engine.
+          # Omitting the full module set keeps the Qt cache small.
+          archives: "qtbase qtsvg"
+          cache: true
+          cache-key-prefix: "qt-6.8.3-win64-msvc2022-base-svg"
 
-        # Copy FFmpeg DLLs with error reporting
-        Write-Host "Copying FFmpeg DLLs..."
-        $ffmpegDlls = @("avcodec*.dll", "avformat*.dll", "avutil*.dll", "swscale*.dll")
-        foreach ($dll in $ffmpegDlls) {
-          $files = Get-ChildItem "$vcpkgBinPath/$dll" -ErrorAction SilentlyContinue
-          if ($files) {
-            foreach ($file in $files) {
-              Copy-Item $file.FullName package/
-              Write-Host "  ✓ Copied $($file.Name)"
-            }
-          } else {
-            Write-Host "  ✗ No files found matching $dll"
-          }
-        }
-
-        # Copy all other required DLLs (dependencies of OpenCV/FFmpeg)
-        Write-Host "Copying other required DLLs..."
-        $otherDlls = Get-ChildItem "$vcpkgBinPath/*.dll" -ErrorAction SilentlyContinue | Where-Object {
-          $_.Name -notmatch "opencv_" -and $_.Name -notmatch "^av" -and $_.Name -notmatch "swscale"
-        }
-        foreach ($dll in $otherDlls) {
-          Copy-Item $dll.FullName package/
-          Write-Host "  ✓ Copied $($dll.Name)"
-        }
-
-        # Copy ONNX Runtime DLLs. This copies CUDA/TensorRT/DML provider DLLs if present.
-        Write-Host "Copying ONNX Runtime DLLs..."
-        $ortVersion = $env:ONNXRUNTIME_VERSION
-        $onnxRuntimePath = "../vendor/onnxruntime-win-x64-gpu-$ortVersion/lib"
-        if (Test-Path $onnxRuntimePath) {
-          $onnxDlls = Get-ChildItem "$onnxRuntimePath/onnxruntime*.dll" -ErrorAction SilentlyContinue
-          foreach ($dll in $onnxDlls) {
-            Copy-Item $dll.FullName package/
-            Write-Host "  ✓ Copied $($dll.Name)"
-          }
-          $directMlDll = Join-Path $onnxRuntimePath "DirectML.dll"
-          if (Test-Path $directMlDll) {
-            Copy-Item $directMlDll package/
-            Write-Host "  ✓ Copied DirectML.dll"
-          }
-          if (-not $onnxDlls) {
-            Write-Host "  ⚠ No ONNX Runtime DLLs found in $onnxRuntimePath"
-          }
-        } else {
-          Write-Host "  ⚠ ONNX Runtime not found at $onnxRuntimePath"
-        }
-
-        # Create version info
-        echo "AutoSlides Extractor - Windows Release" > package/README.txt
-        echo "Version: $env:APP_VERSION" >> package/README.txt
-        echo "Built on: $(Get-Date)" >> package/README.txt
-        echo "" >> package/README.txt
-        echo "Usage:" >> package/README.txt
-        echo "1. Extract all files to a folder" >> package/README.txt
-        echo "2. Run AutoSlidesExtractor.exe" >> package/README.txt
-        echo "3. Select video files to extract slides from" >> package/README.txt
-        echo "4. Optional CLI: install SlidesExtractor from Settings > CLI" >> package/README.txt
-
-        # Verify package contents
-        Write-Host "Final package contents:"
-        Get-ChildItem package/ -Recurse | ForEach-Object {
-          $size = if ($_.PSIsContainer) { "DIR" } else { "$([math]::Round($_.Length/1MB, 2)) MB" }
-          Write-Host "  $($_.Name) - $size"
-        }
-
-        $totalSize = (Get-ChildItem package/ -Recurse -File | Measure-Object -Property Length -Sum).Sum
-        Write-Host "Total package size: $([math]::Round($totalSize/1MB, 2)) MB"
-
-    - name: Create ZIP archive
-      run: |
-        cd build
-        $version = $env:APP_VERSION
-        $zipPath = "AutoSlidesExtractor-Windows-$version.zip"
-        # Remove existing zip file if it exists
-        if (Test-Path $zipPath) {
-          Remove-Item $zipPath -Force
-        }
-        Compress-Archive -Path package/* -DestinationPath $zipPath
-
-    - name: Install NSIS
-      run: |
-        Write-Host "Installing NSIS..."
-        choco install nsis -y
-        Write-Host "NSIS installation completed"
-
-    - name: Create NSIS Installer
-      continue-on-error: true
-      run: |
-        cd build
-        Write-Host "Creating NSIS installer..."
-
-        # Create installer directory structure
-        if (Test-Path "installer") {
-          Remove-Item "installer" -Recurse -Force
-        }
-        mkdir installer
-
-        # Copy NSIS script and resources
-        Copy-Item "../installer/AutoSlidesExtractor.nsi" "installer/"
-        Copy-Item "../installer/license.txt" "installer/"
-        Copy-Item "../resources/icon.ico" "installer/"
-
-        # Copy application files
-        Copy-Item "package" "installer/files" -Recurse
-
-        # Build installer
-        $version = $env:APP_VERSION
-        $installerName = "AutoSlidesExtractor-Setup-$version.exe"
-
-        Write-Host "Building installer: $installerName"
-
-        try {
-          & "C:\Program Files (x86)\NSIS\makensis.exe" `
-            /DVERSION=$version `
-            /DOUTFILE="../$installerName" `
-            installer/AutoSlidesExtractor.nsi
-
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "✓ Installer created successfully: $installerName"
-            if (Test-Path $installerName) {
-              $installerSize = (Get-Item $installerName).Length
-              Write-Host "Installer size: $([math]::Round($installerSize/1MB, 2)) MB"
+      # x-gha needs these in the *job* env. They exist for actions but are not
+      # automatically visible to shell steps unless exported (MS docs).
+      - name: Export GitHub Actions cache env for vcpkg x-gha
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            if (!process.env.ACTIONS_CACHE_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              core.warning('ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN missing — x-gha binary cache will not work');
             } else {
-              Write-Host "⚠ Installer file not found at expected location"
+              core.info('Exported ACTIONS_CACHE_URL and ACTIONS_RUNTIME_TOKEN for vcpkg x-gha');
             }
-          } else {
-            Write-Host "✗ NSIS compilation failed with exit code: $LASTEXITCODE"
+
+      # ------------------------------------------------------------------
+      # Cache strategy: restore early, SAVE IMMEDIATELY after each success.
+      # Combined actions/cache@v4 only writes at end of a *successful job*,
+      # so a packaging failure used to throw away a full ffmpeg/opencv build.
+      # actions/cache/save runs as its own step → survives later failures.
+      # ------------------------------------------------------------------
+
+      - name: Restore vcpkg binary packages (files layer)
+        id: restore-vcpkg-bin
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          # Include MSVC version: package ABIs change when cl.exe changes.
+          # Suffix g3 busts the incomplete 110MB cache that only had ~3 packages.
+          # Do NOT restore-keys fall back past -cl… — that matched the old
+          # incomplete aa66… entry (no MSVC in key) and only restored 3 tools.
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}-cl${{ steps.msvc.outputs.version }}-g3
+          restore-keys: |
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}-cl${{ steps.msvc.outputs.version }}-
+
+      - name: Restore vcpkg tool (pinned)
+        id: restore-vcpkg-tool
+        uses: actions/cache/restore@v4
+        with:
+          path: C:/vcpkg
+          key: vcpkg-tool-${{ runner.os }}-${{ env.VCPKG_COMMIT }}
+
+      - name: Setup vcpkg (pinned commit)
+        run: |
+          $commit = $env:VCPKG_COMMIT
+          $needBootstrap = $true
+          if (Test-Path "C:/vcpkg/.git") {
+            Push-Location C:/vcpkg
+            $head = (git rev-parse HEAD 2>$null)
+            $tag = (git describe --tags --exact-match 2>$null)
+            Pop-Location
+            Write-Host "vcpkg HEAD=$head tag=$tag want=$commit"
+            if ($tag -eq $commit -or $head -eq $commit -or ($head -and $head.StartsWith($commit))) {
+              $needBootstrap = -not (Test-Path "C:/vcpkg/vcpkg.exe")
+            } else {
+              Write-Host "Pinned commit mismatch — re-cloning"
+              Remove-Item "C:/vcpkg" -Recurse -Force
+            }
           }
-        } catch {
-          Write-Host "✗ Exception during NSIS compilation: $($_.Exception.Message)"
-        }
+          if (-not (Test-Path "C:/vcpkg/.git")) {
+            git clone https://github.com/microsoft/vcpkg.git C:/vcpkg
+            Push-Location C:/vcpkg
+            git checkout --force $commit
+            if ($LASTEXITCODE -ne 0) {
+              git fetch --depth 1 origin tag $commit
+              git checkout --force FETCH_HEAD
+            }
+            Pop-Location
+            $needBootstrap = $true
+          }
+          if ($needBootstrap -or -not (Test-Path "C:/vcpkg/vcpkg.exe")) {
+            & C:/vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          }
+          & C:/vcpkg/vcpkg.exe version
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE/vcpkg-bincache" | Out-Null
+          "VCPKG_DEFAULT_BINARY_CACHE=$env:GITHUB_WORKSPACE/vcpkg-bincache" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_ROOT=C:/vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-    - name: Upload ZIP artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: AutoSlidesExtractor-Windows-Portable
-        path: build/AutoSlidesExtractor-Windows-*.zip
-        retention-days: 30
+      # Save tool as soon as bootstrap is good (even if later steps fail).
+      - name: Save vcpkg tool cache
+        if: success() && steps.restore-vcpkg-tool.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:/vcpkg
+          key: vcpkg-tool-${{ runner.os }}-${{ env.VCPKG_COMMIT }}
 
-    - name: Upload installer artifact
-      uses: actions/upload-artifact@v4
-      if: hashFiles('build/AutoSlidesExtractor-Setup-*.exe') != ''
-      with:
-        name: AutoSlidesExtractor-Windows-Installer
-        path: build/AutoSlidesExtractor-Setup-*.exe
-        retention-days: 30
+      - name: Restore ONNX Runtime
+        id: restore-onnx
+        uses: actions/cache/restore@v4
+        with:
+          path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-win-x64-slim1
+
+      - name: Download ONNX Runtime (portable x64, strip debug)
+        if: steps.restore-onnx.outputs.cache-hit != 'true'
+        run: |
+          $ver = $env:ONNXRUNTIME_VERSION
+          $name = "$($env:ONNX_PACKAGE)-$ver"
+          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ver/$name.zip"
+          New-Item -ItemType Directory -Force -Path vendor | Out-Null
+          $zip = "$env:RUNNER_TEMP/$name.zip"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $zip -MaximumRetryCount 3 -RetryIntervalSec 5
+          if (Test-Path "vendor/$name") { Remove-Item "vendor/$name" -Recurse -Force }
+          Expand-Archive -Path $zip -DestinationPath vendor/ -Force
+          Remove-Item $zip -Force
+          if (-not (Test-Path "vendor/$name/lib/onnxruntime.dll")) {
+            throw "ONNX Runtime download incomplete: vendor/$name/lib/onnxruntime.dll missing"
+          }
+          if (-not (Test-Path "vendor/$name/lib/onnxruntime.lib")) {
+            throw "ONNX Runtime download incomplete: vendor/$name/lib/onnxruntime.lib missing (needed to link)"
+          }
+          $libDir = "vendor/$name/lib"
+          Get-ChildItem $libDir -File | ForEach-Object {
+            $keep = $_.Extension -in @('.dll', '.lib')
+            if ($_.Name -match 'cuda|tensorrt|trt') { $keep = $false }
+            if (-not $keep) {
+              Write-Host "  drop $($_.Name) ($([math]::Round($_.Length/1MB, 2)) MB)"
+              Remove-Item $_.FullName -Force
+            }
+          }
+          foreach ($noise in @('Privacy.md', 'ThirdPartyNotices.txt', 'GIT_COMMIT_ID')) {
+            $p = "vendor/$name/$noise"
+            if (Test-Path $p) { Remove-Item $p -Force }
+          }
+          $left = (Get-ChildItem "vendor/$name" -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host "ONNX vendor slim size: $([math]::Round($left/1MB, 2)) MB"
+
+      - name: Verify ONNX Runtime present
+        run: |
+          $name = "$($env:ONNX_PACKAGE)-$($env:ONNXRUNTIME_VERSION)"
+          if (-not (Test-Path "vendor/$name/lib/onnxruntime.dll")) {
+            throw "vendor/$name/lib/onnxruntime.dll missing after cache/download"
+          }
+          if (-not (Test-Path "vendor/$name/lib/onnxruntime.lib")) {
+            throw "vendor/$name/lib/onnxruntime.lib missing after cache/download"
+          }
+          $bad = Get-ChildItem "vendor/$name/lib" -Filter "*cuda*" -ErrorAction SilentlyContinue
+          if ($bad) { throw "CUDA ORT artifacts present in portable vendor tree: $($bad.Name -join ', ')" }
+          Write-Host "ONNX OK: vendor/$name"
+          Get-ChildItem "vendor/$name/lib" -File | ForEach-Object {
+            Write-Host ("  {0,-40} {1,8:N2} MB" -f $_.Name, ($_.Length/1MB))
+          }
+
+      # Save ONNX as soon as download/verify is good.
+      - name: Save ONNX Runtime cache
+        if: success() && steps.restore-onnx.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-win-x64-slim1
+
+      - name: Install vcpkg dependencies
+        id: vcpkg-install
+        run: |
+          if (-not $env:ACTIONS_CACHE_URL -or -not $env:ACTIONS_RUNTIME_TOKEN) {
+            throw "ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN not set — x-gha cannot work (export step missing?)"
+          }
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:GITHUB_WORKSPACE/vcpkg-bincache"
+          Write-Host "VCPKG_BINARY_SOURCES=$env:VCPKG_BINARY_SOURCES"
+          Write-Host "ACTIONS_CACHE_URL is set: $($null -ne $env:ACTIONS_CACHE_URL)"
+          Write-Host "This step compiles OpenCV/FFmpeg on cold cache (can take a long time)."
+          Write-Host "Look for 'Restored N package(s)' — N should cover ffmpeg/opencv, not just 3 host tools."
+          $log = Join-Path $env:RUNNER_TEMP "vcpkg-install.log"
+          & C:/vcpkg/vcpkg.exe install `
+            --triplet x64-windows `
+            --x-manifest-root=. `
+            --x-install-root=build/vcpkg_installed `
+            --feature-flags=manifests,versions,binarycaching 2>&1 |
+            Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
+          $text = Get-Content -Raw $log
+          # Did we compile anything from source? If yes, bincache has new packages → must save.
+          $built = $text -match 'Building (ffmpeg|opencv)'
+          "did_build=$built" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          if ($text -match 'Restored (\d+) package\(s\) from .*vcpkg-bincache') {
+            Write-Host "Files-cache restore count: $($Matches[1])"
+          }
+          $n = @(Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg-bincache" -Recurse -File -ErrorAction SilentlyContinue).Count
+          Write-Host "vcpkg-bincache file count after install: $n"
+          "bincache_files=$n" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # Save after install whenever we may have new packages.
+      # IMPORTANT: do not skip merely because restore reported a hit — a hit can
+      # restore a stale/incomplete tree (e.g. 3 host tools) and then we rebuild
+      # ffmpeg without ever updating the cache key.
+      - name: Save vcpkg binary package cache
+        if: success() && (steps.restore-vcpkg-bin.outputs.cache-hit != 'true' || steps.vcpkg-install.outputs.did_build == 'True')
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}-cl${{ steps.msvc.outputs.version }}-g3
+
+      - name: Configure CMake
+        run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:GITHUB_WORKSPACE/vcpkg-bincache"
+          $generator = "Visual Studio 17 2022"
+          $archArgs = @("-A", "x64")
+          if (Get-Command ninja -ErrorAction SilentlyContinue) {
+            $generator = "Ninja"
+            $archArgs = @()
+          }
+          $cmakeArgs = @(
+            "-S", ".",
+            "-B", "build",
+            "-G", $generator
+          ) + $archArgs + @(
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
+          )
+          Write-Host "cmake $($cmakeArgs -join ' ')"
+          & cmake @cmakeArgs
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+
+      - name: Build
+        run: |
+          cmake --build build --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+
+      - name: Package portable app
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exeSrc = $null
+          foreach ($cand in @(
+            "build/Release/AutoSlidesExtractor.exe",
+            "build/AutoSlidesExtractor.exe"
+          )) {
+            if (Test-Path $cand) { $exeSrc = (Resolve-Path $cand).Path; break }
+          }
+          if (-not $exeSrc) {
+            $found = Get-ChildItem -Path build -Recurse -Filter AutoSlidesExtractor.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -notmatch '\\package\\' } |
+              Select-Object -First 1
+            if (-not $found) { throw "AutoSlidesExtractor.exe not found under build/" }
+            $exeSrc = $found.FullName
+          }
+          Write-Host "EXE: $exeSrc"
+
+          $pkg = "build/package"
+          if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item $exeSrc "$pkg/AutoSlidesExtractor.exe"
+          $exe = (Resolve-Path "$pkg/AutoSlidesExtractor.exe").Path
+
+          # --- Qt ---
+          $windeployqt = $null
+          $cmd = Get-Command windeployqt -ErrorAction SilentlyContinue
+          if ($cmd) { $windeployqt = $cmd.Source }
+          if (-not $windeployqt) {
+            foreach ($c in @(
+              "$env:QT_ROOT_DIR/bin/windeployqt.exe",
+              "$env:IQTA_TOOLS/bin/windeployqt.exe"
+            )) {
+              if ($c -and (Test-Path $c)) { $windeployqt = $c; break }
+            }
+          }
+          if (-not $windeployqt) { throw "windeployqt not found" }
+          Write-Host "windeployqt: $windeployqt"
+          & $windeployqt --release --no-translations --no-system-d3d-compiler --no-opengl-sw --compiler-runtime $exe
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
+
+          # Keep only essential Qt plugin groups (mirrors package-macos.sh)
+          $pluginsRoot = Join-Path $pkg "plugins"
+          if (Test-Path $pluginsRoot) {
+            $keep = @("platforms", "imageformats", "iconengines", "styles")
+            Get-ChildItem $pluginsRoot -Directory | ForEach-Object {
+              if ($keep -notcontains $_.Name) {
+                Write-Host "  remove plugin dir: $($_.Name)"
+                Remove-Item $_.FullName -Recurse -Force
+              }
+            }
+            $img = Join-Path $pluginsRoot "imageformats"
+            if (Test-Path $img) {
+              Get-ChildItem $img -Filter "*.dll" | ForEach-Object {
+                if ($_.Name -notmatch 'q(jpeg|gif|ico|icns|webp|svg)\.dll$') {
+                  Write-Host "  remove imageformat: $($_.Name)"
+                  Remove-Item $_.FullName -Force
+                }
+              }
+            }
+          }
+
+          # --- vcpkg bin dirs (manifest install) ---
+          $vcpkgBins = @(
+            "$env:GITHUB_WORKSPACE/build/vcpkg_installed/x64-windows/bin",
+            "C:/vcpkg/installed/x64-windows/bin"
+          ) | Where-Object { Test-Path $_ } | ForEach-Object { (Resolve-Path $_).Path }
+
+          if (-not $vcpkgBins) {
+            throw "No vcpkg bin directory found (expected build/vcpkg_installed/x64-windows/bin)."
+          }
+          Write-Host "vcpkg bin search paths:"
+          $vcpkgBins | ForEach-Object { Write-Host "  $_" }
+
+          $ortVer = $env:ONNXRUNTIME_VERSION
+          # Portable only — no GPU vendor fallback (would reintroduce CUDA EP).
+          $ortLib = Join-Path $env:GITHUB_WORKSPACE "vendor/$($env:ONNX_PACKAGE)-$ortVer/lib"
+          if (-not (Test-Path "$ortLib/onnxruntime.dll")) {
+            throw "ONNX runtime DLL missing at $ortLib/onnxruntime.dll"
+          }
+          Write-Host "ONNX lib dir: $ortLib"
+
+          $searchRoots = @($pkg) + $vcpkgBins
+          $searchRoots += (Resolve-Path $ortLib).Path
+          $searchRoots += Split-Path $exeSrc -Parent
+
+          function Find-Dll {
+            param([string]$Name)
+            foreach ($root in $searchRoots) {
+              $cand = Join-Path $root $Name
+              if (Test-Path $cand) { return (Resolve-Path $cand).Path }
+            }
+            return $null
+          }
+
+          function Test-SystemDll {
+            param([string]$Name)
+            $n = $Name.ToLowerInvariant()
+            # Leave MSVC runtime to windeployqt --compiler-runtime; don't re-resolve from System32.
+            if ($n -match '^(api-ms-|ext-ms-|ucrtbase|vcruntime|msvcp|concrt|msvc)') { return $true }
+            # Windows OS DLLs (always present on supported targets). dumpbin casing varies.
+            $systemNames = @(
+              "kernel32.dll","user32.dll","gdi32.dll","gdi32full.dll","advapi32.dll","shell32.dll",
+              "ole32.dll","oleaut32.dll","comdlg32.dll","comctl32.dll","combase.dll","shlwapi.dll",
+              "ws2_32.dll","wsock32.dll","iphlpapi.dll","ntdll.dll","rpcrt4.dll",
+              "secur32.dll","crypt32.dll","bcrypt.dll","ncrypt.dll","winmm.dll",
+              "imm32.dll","version.dll","setupapi.dll","cfgmgr32.dll","dwmapi.dll",
+              "uxtheme.dll","d3d9.dll","d3d10.dll","d3d11.dll","d3d12.dll","dxgi.dll",
+              "d3dcompiler_47.dll","dxcore.dll","dwrite.dll","d2d1.dll","dcomp.dll",
+              "opengl32.dll","glu32.dll","gdiplus.dll","winspool.drv","oleacc.dll",
+              "userenv.dll","netapi32.dll","wtsapi32.dll","pdh.dll","psapi.dll",
+              "dbghelp.dll","imagehlp.dll","wintrust.dll","wldap32.dll","normaliz.dll",
+              "dnsapi.dll","mpr.dll","powrprof.dll","bluetoothapis.dll",
+              "mfplat.dll","mf.dll","mfreadwrite.dll","propsys.dll","runtimeobject.dll",
+              "directml.dll","authz.dll","winhttp.dll","wininet.dll","urlmon.dll",
+              "uiautomationcore.dll","inputhost.dll","textinputframework.dll",
+              "coremessaging.dll","coreuicomponents.dll","windows.ui.dll",
+              "twinapi.appcore.dll","rmclient.dll","ninput.dll","wintypes.dll",
+              "sechost.dll","kernelbase.dll","msctf.dll","clbcatq.dll","shcore.dll",
+              "profapi.dll","cryptbase.dll","sspicli.dll","mswsock.dll"
+            )
+            return $systemNames -contains $n
+          }
+
+          $dumpbin = $null
+          $cmd = Get-Command dumpbin.exe -ErrorAction SilentlyContinue
+          if ($cmd) { $dumpbin = $cmd.Source }
+          if (-not $dumpbin) {
+            $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+            if (Test-Path $vswhere) {
+              $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+              if ($vsPath) {
+                $db = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+                if ($db) { $dumpbin = $db.FullName }
+              }
+            }
+          }
+          if (-not $dumpbin) { throw "dumpbin.exe not found" }
+          Write-Host "dumpbin: $dumpbin"
+
+          function Get-Dependents {
+            param([string]$Binary)
+            $out = & $dumpbin /dependents $Binary 2>&1 | Out-String
+            $deps = @()
+            foreach ($line in ($out -split "`r?`n")) {
+              $t = $line.Trim()
+              if ($t -match '^[A-Za-z0-9_\-\.]+\.dll$') { $deps += $t }
+            }
+            return $deps
+          }
+
+          $queue = New-Object System.Collections.Generic.Queue[string]
+          $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+          $queue.Enqueue($exe)
+          Get-ChildItem $pkg -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object {
+            [void]$queue.Enqueue($_.FullName)
+          }
+
+          $copied = 0
+          $unresolved = New-Object System.Collections.Generic.List[string]
+
+          while ($queue.Count -gt 0) {
+            $current = $queue.Dequeue()
+            if (-not $seen.Add($current)) { continue }
+            if (-not (Test-Path $current)) { continue }
+
+            foreach ($depName in (Get-Dependents $current)) {
+              if (Test-SystemDll $depName) { continue }
+
+              $dest = Join-Path $pkg $depName
+              if (Test-Path $dest) {
+                $resolvedDest = (Resolve-Path $dest).Path
+                if (-not $seen.Contains($resolvedDest)) { $queue.Enqueue($resolvedDest) }
+                continue
+              }
+
+              $src = Find-Dll $depName
+              if (-not $src) {
+                $unresolved.Add("$depName  (required by $(Split-Path $current -Leaf))") | Out-Null
+                continue
+              }
+
+              Copy-Item $src $dest -Force
+              Write-Host "  + $depName"
+              $copied++
+              $queue.Enqueue((Resolve-Path $dest).Path)
+            }
+          }
+
+          # Ship onnxruntime.dll always. providers_shared is tiny and only needed if an
+          # EP plugin loads it — include when present (CPU zip has it; harmless).
+          # Never copy *.pdb / *.lib / *cuda* / *tensorrt*.
+          if (Test-Path $ortLib) {
+            foreach ($must in @("onnxruntime.dll", "onnxruntime_providers_shared.dll")) {
+              if ($must -match 'cuda|tensorrt|trt') { continue }
+              $src = Join-Path $ortLib $must
+              $dst = Join-Path $pkg $must
+              if ((Test-Path $src) -and -not (Test-Path $dst)) {
+                Copy-Item $src $dst -Force
+                Write-Host "  + $must (onnx vendor)"
+                $copied++
+              }
+            }
+          }
+
+          Write-Host "Copied $copied additional DLL(s) via dependency walk"
+
+          if ($unresolved.Count -gt 0) {
+            Write-Host "Unresolved non-system DLLs:"
+            $unresolved | ForEach-Object { Write-Host "  $_" }
+            $fatal = $unresolved | Where-Object {
+              $_ -notmatch 'cuda|cublas|cudnn|nvinfer|nvrtc|tensorrt|nppc|nppig'
+            }
+            if ($fatal.Count -gt 0) {
+              throw "Missing $($fatal.Count) required DLL(s). Package is incomplete."
+            }
+            Write-Host "  (optional CUDA/TensorRT unresolved — ignored for portable build)"
+          }
+
+          $requiredGlobs = @(
+            "opencv_core*.dll",
+            "opencv_imgproc*.dll",
+            "opencv_imgcodecs*.dll",
+            "avcodec*.dll",
+            "avformat*.dll",
+            "avutil*.dll",
+            "swscale*.dll",
+            "onnxruntime.dll"
+          )
+          foreach ($g in $requiredGlobs) {
+            $hit = Get-ChildItem $pkg -Filter $g -ErrorAction SilentlyContinue
+            if (-not $hit) { throw "Required DLL missing from package: $g" }
+            Write-Host "  OK $g -> $($hit.Name -join ', ')"
+          }
+
+          $readme = @(
+            "AutoSlides Extractor - Windows Release"
+            "Version: $env:APP_VERSION"
+            "Built: $(Get-Date -Format o)"
+            ""
+            "Usage:"
+            "1. Extract all files to a folder (keep DLLs next to the .exe)."
+            "2. Run AutoSlidesExtractor.exe"
+            "3. Optional CLI: Settings, CLI tab, or run AutoSlidesExtractor.exe --help"
+            ""
+            "Notes:"
+            "- Portable CI build (not code-signed)."
+            "- ML uses ONNX Runtime (DirectML/CPU). CUDA is not redistributed."
+          )
+          $readme | Set-Content -Path "$pkg/README.txt" -Encoding UTF8
+
+          $total = (Get-ChildItem $pkg -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host "Package files: $((Get-ChildItem $pkg -Recurse -File).Count)"
+          Write-Host "Package size: $([math]::Round($total/1MB, 2)) MB"
+
+      - name: Verify package
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "build/package/AutoSlidesExtractor.exe"
+          if (-not (Test-Path $exe)) { throw "package exe missing" }
+          Push-Location build/package
+          try {
+            $out = & .\AutoSlidesExtractor.exe --version 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            Write-Host $out
+            if ($out -match 'unable to|not found|VCRUNTIME|MSVCP|\.dll') {
+              # Only fail on obvious loader errors, not the word "dll" in paths
+              if ($out -match 'The code execution cannot proceed|was not found|VCRUNTIME\d|MSVCP\d') {
+                throw "Runtime dependency error in --version output"
+              }
+            }
+            if ($code -ne 0 -and $out -notmatch 'AutoSlides') {
+              throw "--version failed with exit $code"
+            }
+            Write-Host "Verify OK (exit $code)"
+          } finally {
+            Pop-Location
+          }
+
+      - name: Create ZIP archive
+        id: zip
+        run: |
+          # AutoSlides.Extractor-<ver>-Windows-x64-Portable.zip
+          $zipName = "AutoSlides.Extractor-$env:APP_VERSION-Windows-x64-Portable.zip"
+          $zip = "build/$zipName"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path build/package/* -DestinationPath $zip
+          Write-Host "ZIP: $zip ($([math]::Round((Get-Item $zip).Length/1MB,2)) MB)"
+          "zip_name=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "zip_path=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore NSIS install
+        id: restore-nsis
+        uses: actions/cache/restore@v4
+        with:
+          path: C:/Program Files (x86)/NSIS
+          key: nsis-3.10-installed-${{ runner.os }}
+
+      - name: Install NSIS
+        if: steps.restore-nsis.outputs.cache-hit != 'true'
+        run: |
+          choco install nsis -y --no-progress
+          if (-not (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
+            throw "NSIS install did not produce makensis.exe"
+          }
+
+      - name: Save NSIS install cache
+        if: success() && steps.restore-nsis.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: C:/Program Files (x86)/NSIS
+          key: nsis-3.10-installed-${{ runner.os }}
+
+      - name: Create NSIS installer
+        id: setup
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:APP_VERSION
+          # AutoSlides.Extractor-<ver>-Windows-x64-Setup.exe
+          $installerName = "AutoSlides.Extractor-$version-Windows-x64-Setup.exe"
+          $work = "build/installer"
+          if (Test-Path $work) { Remove-Item $work -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+
+          Copy-Item installer/AutoSlidesExtractor.nsi $work/
+          Copy-Item installer/license.txt $work/
+          Copy-Item resources/icon.ico $work/
+          Copy-Item build/package $work/files -Recurse
+
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $cmd = Get-Command makensis -ErrorAction SilentlyContinue
+            if ($cmd) { $makensis = $cmd.Source } else { $makensis = $null }
+          }
+          if (-not $makensis -or -not (Test-Path $makensis)) { throw "makensis.exe not found" }
+
+          $outFile = (Resolve-Path "build").Path + "\$installerName"
+          Push-Location $work
+          try {
+            & $makensis /DVERSION=$version "/DOUTFILE=$outFile" AutoSlidesExtractor.nsi
+            if ($LASTEXITCODE -ne 0) { throw "makensis failed ($LASTEXITCODE)" }
+          } finally {
+            Pop-Location
+          }
+
+          if (-not (Test-Path "build/$installerName")) {
+            throw "Installer not produced: build/$installerName"
+          }
+          $sz = (Get-Item "build/$installerName").Length
+          Write-Host "Installer: build/$installerName ($([math]::Round($sz/1MB,2)) MB)"
+          "setup_name=$installerName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "setup_path=build/$installerName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Portable
+          path: build/AutoSlides.Extractor-*-Windows-x64-Portable.zip
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Setup
+          path: build/AutoSlides.Extractor-*-Windows-x64-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      # Draft GitHub Release (main / manual only).
+      # softprops uses the `token` input (default github.token), NOT env GITHUB_TOKEN.
+      # Prefer secret RELEASE_PAT (fine-grained: Contents R/W on this repo, or classic `repo`).
+      # Fallback: github.token works when permissions.contents is write (set above).
+      - name: Create draft release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          # Empty secret → github.token (needs contents:write). Non-empty PAT preferred.
+          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: AutoSlides Extractor ${{ steps.version.outputs.version }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Portable.zip
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe

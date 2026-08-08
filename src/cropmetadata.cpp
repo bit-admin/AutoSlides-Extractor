@@ -46,7 +46,8 @@ bool CropMetadata::load(const QString& cropDir, QList<CropEntry>& entries)
     QJsonObject root = doc.object();
     QString version = root.value("version").toString("1.0");
 
-    if (version != "1.0") {
+    // 1.0: base fields. 1.1: adds optional autoCropped (defaults false if missing).
+    if (version != "1.0" && version != "1.1") {
         qWarning() << "CropMetadata: Unsupported version:" << version;
         return false;
     }
@@ -83,7 +84,7 @@ bool CropMetadata::save(const QString& cropDir, const QList<CropEntry>& entries)
     }
 
     QJsonObject root;
-    root["version"] = "1.0";
+    root["version"] = "1.1";
 
     QJsonArray entriesArray;
     for (const CropEntry& entry : entries) {
@@ -174,6 +175,7 @@ QJsonObject CropMetadata::entryToJson(const CropEntry& entry)
     json["cropW"] = entry.cropW;
     json["cropH"] = entry.cropH;
     json["timestamp"] = entry.timestamp.toString(Qt::ISODate);
+    json["autoCropped"] = entry.autoCropped;
     return json;
 }
 
@@ -189,5 +191,7 @@ CropEntry CropMetadata::jsonToEntry(const QJsonObject& json)
     entry.cropW = json.value("cropW").toInt();
     entry.cropH = json.value("cropH").toInt();
     entry.timestamp = QDateTime::fromString(json.value("timestamp").toString(), Qt::ISODate);
+    // Missing key (schema 1.0) → false.
+    entry.autoCropped = json.value("autoCropped").toBool(false);
     return entry;
 }

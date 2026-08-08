@@ -7,6 +7,7 @@
 #include <QMap>
 #include <vector>
 #include "phashcalculator.h"
+#include "configmanager.h"  // AutoCropConfig
 
 /**
  * @brief Structure to hold exclusion list entry
@@ -26,10 +27,14 @@ struct ExclusionEntry {
  */
 struct PostProcessingResult {
     int totalRemoved;       // Total images moved to trash
-    int removedByPHash;     // Images removed by pHash (duplicates + exclusion list)
+    int removedByPHash;     // Images removed by pHash (duplicates + exclusion list + post-crop)
     int removedByML;        // Images removed by ML classification
+    int autoCroppedKept;    // may_be_slide frames kept after successful auto-crop
+    int removedByPostCropPHash; // subset of removedByPHash from post-crop candidate pass
 
-    PostProcessingResult() : totalRemoved(0), removedByPHash(0), removedByML(0) {}
+    PostProcessingResult()
+        : totalRemoved(0), removedByPHash(0), removedByML(0),
+          autoCroppedKept(0), removedByPostCropPHash(0) {}
 };
 
 /**
@@ -64,7 +69,11 @@ public:
      * @param mlDeleteMaybeSlides Whether to delete "may_be_slide" classes
      * @param mlExecutionProvider Preferred execution provider
      * @param useApplicationTrash Use application trash instead of system trash
-     * @param baseOutputDir Base output directory (for application trash)
+     * @param baseOutputDir Base output directory (for application trash / crop store)
+     * @param mlAutoCropMaybeSlides Try auto-crop before trashing ML may_be_slide
+     * @param mlPostCropDedup Candidate-only pHash recheck after successful auto-crops
+     * @param autoCropConfig Detector settings for post-process auto-crop
+     * @param jpegQuality JPEG quality for CropManager::applyCrop
      * @return PostProcessingResult with breakdown of removals
      */
     PostProcessingResult processDirectory(const QString& imageDir,
@@ -82,7 +91,11 @@ public:
                                          bool mlDeleteMaybeSlides = true,
                                          const QString& mlExecutionProvider = "Auto",
                                          bool useApplicationTrash = true,
-                                         const QString& baseOutputDir = QString());
+                                         const QString& baseOutputDir = QString(),
+                                         bool mlAutoCropMaybeSlides = false,
+                                         bool mlPostCropDedup = false,
+                                         const AutoCropConfig& autoCropConfig = AutoCropConfig(),
+                                         int jpegQuality = 95);
 
     /**
      * @brief Get list of images that were moved to trash
@@ -184,7 +197,11 @@ private:
      * @param mlDeleteMaybeSlides Whether to delete "may_be_slide" classes
      * @param mlExecutionProvider Preferred execution provider
      * @param useApplicationTrash Use application trash instead of system trash
-     * @param baseOutputDir Base output directory (for application trash)
+     * @param baseOutputDir Base output directory (for application trash / crop store)
+     * @param mlAutoCropMaybeSlides Try auto-crop before trashing ML may_be_slide
+     * @param autoCropConfig Detector settings
+     * @param jpegQuality JPEG quality for applyCrop
+     * @param outAutoCroppedKept Optional list of live paths kept after successful auto-crop
      * @return List of files moved to trash
      */
     QStringList classifyAndRemove(const QMap<QString, std::vector<uint8_t>>& imageHashes,
@@ -197,7 +214,26 @@ private:
                                   bool mlDeleteMaybeSlides,
                                   const QString& mlExecutionProvider,
                                   bool useApplicationTrash,
-                                  const QString& baseOutputDir);
+                                  const QString& baseOutputDir,
+                                  bool mlAutoCropMaybeSlides = false,
+                                  const AutoCropConfig& autoCropConfig = AutoCropConfig(),
+                                  int jpegQuality = 95,
+                                  QStringList* outAutoCroppedKept = nullptr);
+
+    /**
+     * @brief Candidate-only pHash pass for slides just auto-cropped-and-kept.
+     *
+     * Seeds "seen" hashes from remaining active slides that were not in
+     * @p autoCroppedKept, then walks auto-cropped candidates in stable name
+     * order. Duplicates are trashed as phash_duplicate; .extractorCrop backup
+     * is left intact.
+     */
+    QStringList removePostCropDuplicates(const QString& imageDir,
+                                         const QStringList& autoCroppedKept,
+                                         const QMap<QString, std::vector<uint8_t>>& priorHashes,
+                                         int hammingThreshold,
+                                         bool useApplicationTrash,
+                                         const QString& baseOutputDir);
 
     QStringList m_movedToTrash;
     int m_totalProcessed;

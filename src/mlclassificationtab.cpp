@@ -96,6 +96,24 @@ MLClassificationTab::MLClassificationTab(QWidget* parent)
     m_maybeSlideRangeSlider->setMinimumHeight(50);
     mlLayout->addWidget(m_maybeSlideRangeSlider);
 
+    // Nested options under Delete may_be_slide (post-process auto-crop path).
+    m_autoCropMaybeSlidesCheckBox = new QCheckBox(
+        "Auto-crop may_be_slide before delete (keep if crop succeeds)", this);
+    m_autoCropMaybeSlidesCheckBox->setToolTip(
+        "During post-processing, try Canny/YOLO auto-crop on may_be_slide frames "
+        "before trashing them. Successful crops stay as live slides with a "
+        ".extractorCrop backup.");
+    m_autoCropMaybeSlidesCheckBox->setStyleSheet("margin-left: 18px;");
+    mlLayout->addWidget(m_autoCropMaybeSlidesCheckBox);
+
+    m_postCropDedupCheckBox = new QCheckBox(
+        "Re-check pHash duplicates after auto-crop", this);
+    m_postCropDedupCheckBox->setToolTip(
+        "After successful auto-crops, compare those cropped slides against "
+        "remaining slides and trash post-crop duplicates (phash_duplicate).");
+    m_postCropDedupCheckBox->setStyleSheet("margin-left: 18px;");
+    mlLayout->addWidget(m_postCropDedupCheckBox);
+
     // === slide_max threshold (shared) ===
     QLabel* slideMaxLabel = new QLabel("Max 'slide' probability (for Check zone)", this);
     slideMaxLabel->setStyleSheet("font-weight: bold; margin-top: 4px;");
@@ -132,11 +150,19 @@ MLClassificationTab::MLClassificationTab(QWidget* parent)
     connect(m_browseModelButton, &QPushButton::clicked, this, &MLClassificationTab::onBrowseModel);
     connect(m_useDefaultModelButton, &QPushButton::clicked, this, &MLClassificationTab::onUseDefaultModel);
     connect(m_testButton, &QPushButton::clicked, this, &MLClassificationTab::onTest);
+    connect(m_deleteMaybeSlidesCheckBox, &QCheckBox::toggled,
+            this, &MLClassificationTab::updateMaybeSlideOptionEnabled);
+    connect(m_autoCropMaybeSlidesCheckBox, &QCheckBox::toggled,
+            this, &MLClassificationTab::updateMaybeSlideOptionEnabled);
+
+    updateMaybeSlideOptionEnabled();
 }
 
 void MLClassificationTab::load(const AppConfig& config)
 {
     m_deleteMaybeSlidesCheckBox->setChecked(config.mlDeleteMaybeSlides);
+    m_autoCropMaybeSlidesCheckBox->setChecked(config.mlAutoCropMaybeSlides);
+    m_postCropDedupCheckBox->setChecked(config.mlPostCropDedup);
 
     if (config.mlModelPath.startsWith(":/")) {
         m_modelPathEdit->clear();
@@ -150,11 +176,15 @@ void MLClassificationTab::load(const AppConfig& config)
     m_maybeSlideRangeSlider->setUpperValue(static_cast<int>(config.mlMaybeSlideHighThreshold * 100));
     m_maybeSlideRangeSlider->setLowerValue(static_cast<int>(config.mlMaybeSlideLowThreshold * 100));
     m_slideMaxThresholdSlider->setValue(static_cast<int>(config.mlSlideMaxThreshold * 100));
+
+    updateMaybeSlideOptionEnabled();
 }
 
 void MLClassificationTab::store(AppConfig& config) const
 {
     config.mlDeleteMaybeSlides = m_deleteMaybeSlidesCheckBox->isChecked();
+    config.mlAutoCropMaybeSlides = m_autoCropMaybeSlidesCheckBox->isChecked();
+    config.mlPostCropDedup = m_postCropDedupCheckBox->isChecked();
 
     config.mlModelPath = m_modelPathEdit->text().isEmpty()
         ? QString(kDefaultModel)
@@ -165,6 +195,14 @@ void MLClassificationTab::store(AppConfig& config) const
     config.mlMaybeSlideHighThreshold = m_maybeSlideRangeSlider->upperValue() / 100.0f;
     config.mlMaybeSlideLowThreshold = m_maybeSlideRangeSlider->lowerValue() / 100.0f;
     config.mlSlideMaxThreshold = m_slideMaxThresholdSlider->value() / 100.0f;
+}
+
+void MLClassificationTab::updateMaybeSlideOptionEnabled()
+{
+    const bool deleteMaybe = m_deleteMaybeSlidesCheckBox->isChecked();
+    m_autoCropMaybeSlidesCheckBox->setEnabled(deleteMaybe);
+    const bool autoCrop = deleteMaybe && m_autoCropMaybeSlidesCheckBox->isChecked();
+    m_postCropDedupCheckBox->setEnabled(autoCrop);
 }
 
 void MLClassificationTab::onBrowseModel()

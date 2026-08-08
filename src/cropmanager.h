@@ -62,12 +62,16 @@ public:
      * @param baseOutputDir Base output directory.
      * @param cropRectImagePixels Crop rectangle in original-image pixels.
      * @param jpegQuality JPEG quality (1–100) used when re-saving the cropped live file.
+     * @param autoCropped When true, mark the crop entry as produced by automated
+     *        post-process auto-crop (not a manual Review edit). Manual crops /
+     *        recrops should leave this false (default).
      * @return true on success.
      */
     static bool applyCrop(const QString& livePath,
                           const QString& baseOutputDir,
                           const QRect& cropRectImagePixels,
-                          int jpegQuality);
+                          int jpegQuality,
+                          bool autoCropped = false);
 
     /**
      * @brief Restore the original (uncropped) image for a backup filename.

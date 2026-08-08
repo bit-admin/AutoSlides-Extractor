@@ -40,6 +40,7 @@ private:
     QDoubleSpinBox* m_customSSIMSpinBox = nullptr;
     QSpinBox* m_chunkSizeSpinBox = nullptr;
     QSpinBox* m_jpegQualitySpinBox = nullptr;
+    QCheckBox* m_writeTimelineCheckBox = nullptr;
     QCheckBox* m_enableDownsamplingCheckBox = nullptr;
     QComboBox* m_downsamplePresetCombo = nullptr;
     QSpinBox* m_downsampleWidthSpinBox = nullptr;

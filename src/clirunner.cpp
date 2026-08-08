@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QDateTime>
 #include <QMetaObject>
+#include <QDebug>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -491,6 +492,17 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         QStringLiteral("Max slide probability for medium-confidence deletion."), QStringLiteral("f"));
     QCommandLineOption mlDelMaybeOpt(QStringLiteral("ml-delete-maybe-slides"),
         QStringLiteral("Delete may_be_slide images: true|false."), QStringLiteral("bool"));
+    QCommandLineOption mlAutoCropMaybeOpt(QStringLiteral("ml-autocrop-maybe"),
+        QStringLiteral("Opt-in: try auto-crop on ML may_be_slide frames before deleting them. "
+                       "Off by default (does not inherit GUI setting)."));
+    QCommandLineOption mlPostCropDedupOpt(QStringLiteral("ml-postcrop-dedup"),
+        QStringLiteral("Opt-in: after successful auto-crops, re-check those slides for pHash "
+                       "duplicates. Off by default (does not inherit GUI setting). "
+                       "Requires --ml-autocrop-maybe to have effect."));
+    QCommandLineOption writeTimelineOpt(QStringLiteral("write-timeline"),
+        QStringLiteral("Opt-in: write timeline.json (media time → slide map) inside the slides "
+                       "folder. Off by default (does not inherit GUI setting). Compatible with "
+                       "--compatible."));
 
     QCommandLineOption jsonOpt(QStringLiteral("json"),
         QStringLiteral("Emit NDJSON / JSON Lines events to stdout (and JSON errors to stderr) "
@@ -524,6 +536,9 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(mlMaybeLowOpt);
     parser.addOption(mlSlideMaxOpt);
     parser.addOption(mlDelMaybeOpt);
+    parser.addOption(mlAutoCropMaybeOpt);
+    parser.addOption(mlPostCropDedupOpt);
+    parser.addOption(writeTimelineOpt);
     parser.addOption(jsonOpt);
     parser.addOption(compatibleOpt);
 
@@ -576,6 +591,7 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
             "ml-not-slide-high", "ml-not-slide-low",
             "ml-maybe-slide-high", "ml-maybe-slide-low",
             "ml-slide-max", "ml-delete-maybe-slides",
+            "ml-autocrop-maybe", "ml-postcrop-dedup",
         };
         for (const char* name : kForbidden) {
             if (parser.isSet(QString::fromLatin1(name))) {
@@ -685,6 +701,15 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         }
         m_config.mlDeleteMaybeSlides = b;
     }
+
+    // Force opt-in: do not inherit GUI QSettings true for these features.
+    m_config.mlAutoCropMaybeSlides = parser.isSet(mlAutoCropMaybeOpt);
+    m_config.mlPostCropDedup = parser.isSet(mlPostCropDedupOpt);
+    if (m_config.mlPostCropDedup && !m_config.mlAutoCropMaybeSlides) {
+        // Silent no-op: post-crop dedup only applies to slides auto-cropped this run.
+        qInfo() << "CliRunner: --ml-postcrop-dedup ignored without --ml-autocrop-maybe";
+    }
+    m_config.writeTimeline = parser.isSet(writeTimelineOpt);
 
     return true;
 }

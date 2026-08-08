@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0] - 2026-08-08
+
+### 🚀 Added
+
+#### Timeline (`timeline.json`)
+- **Media-time → slide map**: Each slides folder can now contain a colocated `timeline.json` that records I-frame PTS media times for confirmed captures, so players (including Electron consumers) can map video position to the current slide image.
+- **`TimelineMetadata`**: New writer/manager (schema v1, `extractor: "qt"`) with capture events (`changeAt` / `confirmedAt` / `initialFile`) and a mutable `resolutions` map (`canonical` | `duplicate` | `gap`). Events are never deleted; post-process and Review only update resolutions.
+- **Capture path**: Hardware decode now carries media PTS seconds per sampled I-frame through `FrameChunk` into `SlideDetector`, which returns `ConfirmedSlideTiming` alongside selected indices. On successful save, `ProcessingThread` appends a capture event when enabled.
+- **Resolution updates**:
+  - pHash duplicate / post-crop duplicate → `duplicate` (`duplicateOf` first-kept basename)
+  - Exclusion list / ML trash → `gap` (`exclusion` / `ai_filtered`)
+  - Slides Review manual delete → `gap` (`manual_trash`); restore and auto-crop-from-trash restore → `canonical`
+- **Settings**: GUI default **on** under Processing → Output Settings (“Write timeline.json”). CLI **off** unless **`--write-timeline`** (does not inherit GUI true). Compatible with `--compatible`.
+
+#### Post-process auto-crop for ML `may_be_slide`
+- **Keep instead of trash**: When ML would delete a `may_be_slide_*` frame, optionally run the same Canny/YOLO `AutoCropDetector` used by Review and commit an in-place crop via `CropManager::applyCrop(..., autoCropped=true)`. Success keeps the live slide; failure falls back to trash as `ml_maybe_slide`.
+- **Post-crop pHash**: After successful auto-crops, a candidate-only pHash pass rehashes those files, seeds “seen” from remaining non-candidate slides, and trashes post-crop duplicates as `phash_duplicate` (`.extractorCrop` backup/metadata left intact for Review restore).
+- **Settings UI**: Nested under Delete may_be_slide in ML Classification:
+  - “Auto-crop may_be_slide before delete (keep if crop succeeds)” (`mlAutoCropMaybeSlides`, GUI default **true**)
+  - “Re-check pHash duplicates after auto-crop” (`mlPostCropDedup`, GUI default **true**; enabled only when Delete + Auto-crop are on)
+- **CLI opt-in** (forced false unless flags set; never inherit GUI true):
+  - **`--ml-autocrop-maybe`**
+  - **`--ml-postcrop-dedup`** (no-op without auto-crop)
+- **Crop metadata 1.1**: `CropEntry` / `.extractorCrop/metadata.json` gain `autoCropped` bool. Load accepts schema 1.0 and 1.1; missing key defaults to false. Manual Review crops remain `autoCropped=false`.
+
+#### Command-Line Interface
+- **`--write-timeline`**: Opt-in media-time map for headless / Electron-compatible runs.
+- **`--ml-autocrop-maybe`** / **`--ml-postcrop-dedup`**: Opt-in post-process auto-crop path (forbidden under `--compatible` like other post-process flags).
+
+### 🛠 Changed
+
+- **Version Bump**: Application, CMake project, Windows resource, NSIS installer, and vcpkg metadata updated from `1.2.2` to `2.0.0`.
+- **Detection pipeline timing**: `HardwareDecoder` chunk callbacks, `FrameChunk`, `ProcessingState` (pending change PTS across chunks), and `SlideDetector::detectSlidesFromChunk` now thread media timestamps through confirmation so timeline capture is accurate across chunk boundaries.
+- **`PostProcessor` / `ProcessingPipeline`**: `processDirectory` extended with auto-crop flags, `AutoCropConfig`, and JPEG quality; result counters add `autoCroppedKept` and `removedByPostCropPHash`.
+- **Windows CI packaging**: Rewrote `.github/workflows/build-windows.yml` for portable ZIP + NSIS with concurrency cancel, pinned vcpkg commit + binary cache (not full installed tree), DirectML/CPU ONNX package (no CUDA redistributable), dep discovery from the built binary (no hardcoded OpenCV 4.x names), fail-hard missing DLLs, version from `CMakeLists.txt`, and `--version`-only verification.
+
+### ⚙️ Technical
+
+- **New class**: `TimelineMetadata` (`src/timelinemetadata.h` / `.cpp`).
+- **New types**: `SlideCaptureEvent`, `SlideResolution`, `TimelineData`, `ConfirmedSlideTiming`.
+- **Config keys**: `writeTimeline`, `mlAutoCropMaybeSlides`, `mlPostCropDedup`.
+- **OpenCV 5**: `autocropdetector.cpp` includes `opencv2/geometry.hpp` for contour helpers moved out of the main OpenCV header.
+- **mark\* no-ops**: Timeline resolution helpers are silent when `timeline.json` is absent so post-process/Review stay unchanged when timeline writing is off.
+
+---
+
 ## [1.2.2] - 2026-06-06
 
 ### 🛠 Changed

@@ -30,6 +30,12 @@ struct ProcessingState {
     // Zero-copy single-frame overlap mechanism
     FrameBuffer lastFrameBuffer;            // Last frame from the previous chunk (zero-copy)
     int lastFrameGlobalIndex;               // Global index of the last frame
+    double lastFrameTimestamp;              // Media PTS seconds of lastFrameBuffer
+
+    // Cross-chunk candidate transition PTS (set when a transition opens; used when
+    // verification confirms on a later chunk). hasPendingChangeAt gates validity.
+    bool hasPendingChangeAt;
+    double pendingChangeAt;
 
     // Verification state management for cross-chunk continuity
     VerificationState lastFrameVerificationState;  // Verification state of the last frame
@@ -47,6 +53,9 @@ struct ProcessingState {
     ProcessingState() :
         lastStableIndex(-1),
         lastFrameGlobalIndex(-1),
+        lastFrameTimestamp(0.0),
+        hasPendingChangeAt(false),
+        pendingChangeAt(0.0),
         lastFrameVerificationState(VerificationState::NONE),
         verificationStartIndex(-1),
         globalFrameOffset(0),
@@ -62,6 +71,9 @@ struct ProcessingState {
         lastStableIndex = -1;
         lastFrameBuffer.reset();
         lastFrameGlobalIndex = -1;
+        lastFrameTimestamp = 0.0;
+        hasPendingChangeAt = false;
+        pendingChangeAt = 0.0;
         lastFrameVerificationState = VerificationState::NONE;
         verificationStartIndex = -1;
         globalFrameOffset = 0;
@@ -129,6 +141,8 @@ struct FrameChunk {
     int startOffset;                // Starting offset of this chunk in the video (frame index)
     bool isLastChunk;               // Flag indicating if this is the final chunk
     bool useOptimizedStorage;       // Flag to indicate which storage method is active
+    // Parallel media PTS seconds for each frame in this chunk (same length as frames/frameBuffers).
+    std::vector<double> timestamps;
 
     /**
      * Default constructor
@@ -145,6 +159,14 @@ struct FrameChunk {
         frames(frameData), startOffset(offset), isLastChunk(isLast), useOptimizedStorage(false) {}
 
     /**
+     * Constructor with Mat vector + media timestamps
+     */
+    FrameChunk(const std::vector<cv::Mat>& frameData, const std::vector<double>& ptsSeconds,
+               int offset, bool isLast) :
+        frames(frameData), startOffset(offset), isLastChunk(isLast),
+        useOptimizedStorage(false), timestamps(ptsSeconds) {}
+
+    /**
      * Constructor with FrameBuffer vector (optimized)
      * @param frameBufferData Vector of FrameBuffers for this chunk
      * @param offset Starting frame offset in the video
@@ -153,6 +175,14 @@ struct FrameChunk {
     FrameChunk(std::vector<FrameBuffer>&& frameBufferData, int offset, bool isLast) :
         frameBuffers(std::move(frameBufferData)), startOffset(offset),
         isLastChunk(isLast), useOptimizedStorage(true) {}
+
+    /**
+     * Constructor with FrameBuffer vector + media timestamps
+     */
+    FrameChunk(std::vector<FrameBuffer>&& frameBufferData, std::vector<double>&& ptsSeconds,
+               int offset, bool isLast) :
+        frameBuffers(std::move(frameBufferData)), startOffset(offset),
+        isLastChunk(isLast), useOptimizedStorage(true), timestamps(std::move(ptsSeconds)) {}
 
     /**
      * Constructor with memory-mapped chunk (most optimized)
@@ -173,7 +203,8 @@ struct FrameChunk {
         frameBuffers(std::move(other.frameBuffers)),
         startOffset(other.startOffset),
         isLastChunk(other.isLastChunk),
-        useOptimizedStorage(other.useOptimizedStorage) {}
+        useOptimizedStorage(other.useOptimizedStorage),
+        timestamps(std::move(other.timestamps)) {}
 
     /**
      * Move assignment operator
@@ -186,6 +217,7 @@ struct FrameChunk {
             startOffset = other.startOffset;
             isLastChunk = other.isLastChunk;
             useOptimizedStorage = other.useOptimizedStorage;
+            timestamps = std::move(other.timestamps);
         }
         return *this;
     }

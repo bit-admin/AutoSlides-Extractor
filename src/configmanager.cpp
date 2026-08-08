@@ -15,6 +15,7 @@ const QString ConfigManager::KEY_DOWNSAMPLE_WIDTH = "downsampleWidth";
 const QString ConfigManager::KEY_DOWNSAMPLE_HEIGHT = "downsampleHeight";
 const QString ConfigManager::KEY_CHUNK_SIZE = "chunkSize";
 const QString ConfigManager::KEY_JPEG_QUALITY = "jpegQuality";
+const QString ConfigManager::KEY_WRITE_TIMELINE = "writeTimeline";
 const QString ConfigManager::KEY_ENABLE_POST_PROCESSING = "enablePostProcessing";
 const QString ConfigManager::KEY_DELETE_REDUNDANT = "deleteRedundant";
 const QString ConfigManager::KEY_COMPARE_EXCLUDED = "compareExcluded";
@@ -24,6 +25,8 @@ const QString ConfigManager::KEY_EXCLUSION_REMARK = "exclusionRemark";
 const QString ConfigManager::KEY_EXCLUSION_HASH = "exclusionHash";
 const QString ConfigManager::KEY_ENABLE_ML_CLASSIFICATION = "enableMLClassification";
 const QString ConfigManager::KEY_ML_DELETE_MAYBE_SLIDES = "mlDeleteMaybeSlides";
+const QString ConfigManager::KEY_ML_AUTOCROP_MAYBE_SLIDES = "mlAutoCropMaybeSlides";
+const QString ConfigManager::KEY_ML_POST_CROP_DEDUP = "mlPostCropDedup";
 const QString ConfigManager::KEY_ML_MODEL_PATH = "mlModelPath";
 const QString ConfigManager::KEY_ML_EXECUTION_PROVIDER = "mlExecutionProvider";
 const QString ConfigManager::KEY_ML_NOT_SLIDE_HIGH_THRESHOLD = "mlNotSlideHighThreshold";
@@ -81,6 +84,7 @@ AppConfig ConfigManager::loadConfig()
     config.downsampleHeight = m_settings->value(KEY_DOWNSAMPLE_HEIGHT, config.downsampleHeight).toInt();
     config.chunkSize = m_settings->value(KEY_CHUNK_SIZE, config.chunkSize).toInt();
     config.jpegQuality = m_settings->value(KEY_JPEG_QUALITY, config.jpegQuality).toInt();
+    config.writeTimeline = m_settings->value(KEY_WRITE_TIMELINE, config.writeTimeline).toBool();
 
     // Load post-processing settings
     config.enablePostProcessing = m_settings->value(KEY_ENABLE_POST_PROCESSING, config.enablePostProcessing).toBool();
@@ -91,6 +95,8 @@ AppConfig ConfigManager::loadConfig()
     // Load ML classification settings
     config.enableMLClassification = m_settings->value(KEY_ENABLE_ML_CLASSIFICATION, config.enableMLClassification).toBool();
     config.mlDeleteMaybeSlides = m_settings->value(KEY_ML_DELETE_MAYBE_SLIDES, config.mlDeleteMaybeSlides).toBool();
+    config.mlAutoCropMaybeSlides = m_settings->value(KEY_ML_AUTOCROP_MAYBE_SLIDES, config.mlAutoCropMaybeSlides).toBool();
+    config.mlPostCropDedup = m_settings->value(KEY_ML_POST_CROP_DEDUP, config.mlPostCropDedup).toBool();
     config.mlModelPath = m_settings->value(KEY_ML_MODEL_PATH, config.mlModelPath).toString();
     config.mlExecutionProvider = m_settings->value(KEY_ML_EXECUTION_PROVIDER, config.mlExecutionProvider).toString();
     config.mlNotSlideHighThreshold = m_settings->value(KEY_ML_NOT_SLIDE_HIGH_THRESHOLD, config.mlNotSlideHighThreshold).toFloat();
@@ -126,6 +132,7 @@ void ConfigManager::saveConfig(const AppConfig& config)
     m_settings->setValue(KEY_DOWNSAMPLE_HEIGHT, config.downsampleHeight);
     m_settings->setValue(KEY_CHUNK_SIZE, config.chunkSize);
     m_settings->setValue(KEY_JPEG_QUALITY, config.jpegQuality);
+    m_settings->setValue(KEY_WRITE_TIMELINE, config.writeTimeline);
 
     // Save post-processing settings
     m_settings->setValue(KEY_ENABLE_POST_PROCESSING, config.enablePostProcessing);
@@ -136,6 +143,8 @@ void ConfigManager::saveConfig(const AppConfig& config)
     // Save ML classification settings
     m_settings->setValue(KEY_ENABLE_ML_CLASSIFICATION, config.enableMLClassification);
     m_settings->setValue(KEY_ML_DELETE_MAYBE_SLIDES, config.mlDeleteMaybeSlides);
+    m_settings->setValue(KEY_ML_AUTOCROP_MAYBE_SLIDES, config.mlAutoCropMaybeSlides);
+    m_settings->setValue(KEY_ML_POST_CROP_DEDUP, config.mlPostCropDedup);
     m_settings->setValue(KEY_ML_MODEL_PATH, config.mlModelPath);
     m_settings->setValue(KEY_ML_EXECUTION_PROVIDER, config.mlExecutionProvider);
     m_settings->setValue(KEY_ML_NOT_SLIDE_HIGH_THRESHOLD, config.mlNotSlideHighThreshold);

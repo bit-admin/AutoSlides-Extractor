@@ -525,6 +525,7 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
     int iFrameCount = 0;
     bool skipNext = false;
     std::vector<cv::Mat> currentChunk;
+    std::vector<double> currentTimestamps;
     int chunkStartOffset = 0;
 
     while (true) {
@@ -571,13 +572,19 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
                             cv::Mat mat;
 
                             if (convertFrameToMat(targetFrame, mat)) {
-                                // Add frame to current chunk (mat is already cloned in convertFrameToMat)
+                                // Media PTS seconds for this sampled I-frame
+                                double timestamp = 0.0;
+                                if (m_packet->pts != AV_NOPTS_VALUE) {
+                                    timestamp = (double)m_packet->pts *
+                                        av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
+                                }
+
+                                // Add frame + timestamp to current chunk
                                 currentChunk.push_back(mat);
+                                currentTimestamps.push_back(timestamp);
 
                                 // Progress callback
                                 if (progressCallback && m_videoInfo.duration > 0) {
-                                    double timestamp = (double)m_packet->pts *
-                                        av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
                                     double progress = (timestamp / m_videoInfo.duration) * 100.0;
                                     progressCallback(timestamp, m_videoInfo.duration, progress);
                                 }
@@ -587,11 +594,12 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
                                 // Check if chunk is full
                                 if (currentChunk.size() >= static_cast<size_t>(chunkSize)) {
                                     // Call chunk callback with current chunk
-                                    chunkCallback(currentChunk, chunkStartOffset, false);
+                                    chunkCallback(currentChunk, currentTimestamps, chunkStartOffset, false);
 
                                     // Prepare for next chunk
                                     chunkStartOffset = totalFrameCount;
                                     currentChunk.clear();
+                                    currentTimestamps.clear();
                                 }
                             }
                         }
@@ -605,7 +613,7 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
 
     // Handle remaining frames in the last chunk
     if (!currentChunk.empty()) {
-        chunkCallback(currentChunk, chunkStartOffset, true); // Mark as last chunk
+        chunkCallback(currentChunk, currentTimestamps, chunkStartOffset, true); // Mark as last chunk
     }
 
     return totalFrameCount;
@@ -828,7 +836,9 @@ int HardwareDecoder::extractFramesInChunksOptimized(const OptimizedChunkReadyCal
     int iFrameCount = 0;
     bool skipNext = false;
     std::vector<FrameBuffer> currentChunk;
+    std::vector<double> currentTimestamps;
     currentChunk.reserve(chunkSize); // Pre-allocate to avoid reallocations
+    currentTimestamps.reserve(chunkSize);
     int chunkStartOffset = 0;
 
     while (av_read_frame(m_formatContext, m_packet) >= 0) {
@@ -860,13 +870,18 @@ int HardwareDecoder::extractFramesInChunksOptimized(const OptimizedChunkReadyCal
                             FrameBuffer frameBuffer;
 
                             if (convertFrameToFrameBuffer(targetFrame, frameBuffer)) {
-                                // Add FrameBuffer to current chunk (move semantics)
+                                double timestamp = 0.0;
+                                if (m_packet->pts != AV_NOPTS_VALUE) {
+                                    timestamp = (double)m_packet->pts *
+                                        av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
+                                }
+
+                                // Add FrameBuffer + timestamp to current chunk (move semantics)
                                 currentChunk.emplace_back(std::move(frameBuffer));
+                                currentTimestamps.push_back(timestamp);
 
                                 // Progress callback
                                 if (progressCallback && m_videoInfo.duration > 0) {
-                                    double timestamp = (double)m_packet->pts *
-                                        av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
                                     double progress = (timestamp / m_videoInfo.duration) * 100.0;
                                     progressCallback(timestamp, m_videoInfo.duration, progress);
                                 }
@@ -876,12 +891,15 @@ int HardwareDecoder::extractFramesInChunksOptimized(const OptimizedChunkReadyCal
                                 // Check if chunk is full
                                 if (currentChunk.size() >= static_cast<size_t>(chunkSize)) {
                                     // Call chunk callback with current chunk (move semantics)
-                                    chunkCallback(std::move(currentChunk), chunkStartOffset, false);
+                                    chunkCallback(std::move(currentChunk), std::move(currentTimestamps),
+                                                  chunkStartOffset, false);
 
                                     // Prepare for next chunk
                                     chunkStartOffset = totalFrameCount;
                                     currentChunk.clear();
+                                    currentTimestamps.clear();
                                     currentChunk.reserve(chunkSize); // Re-reserve capacity
+                                    currentTimestamps.reserve(chunkSize);
                                 }
                             }
                         }
@@ -895,7 +913,8 @@ int HardwareDecoder::extractFramesInChunksOptimized(const OptimizedChunkReadyCal
 
     // Handle remaining frames in the last chunk
     if (!currentChunk.empty()) {
-        chunkCallback(std::move(currentChunk), chunkStartOffset, true); // Mark as last chunk
+        chunkCallback(std::move(currentChunk), std::move(currentTimestamps),
+                      chunkStartOffset, true); // Mark as last chunk
     }
 
     return totalFrameCount;

@@ -102,6 +102,7 @@ SlideDetectionResult SlideDetector::detectSlidesFromFramesWithConfig(const std::
 }
 
 SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::Mat>& newFrames,
+                                                        const std::vector<double>& newTimestamps,
                                                         ProcessingState& state,
                                                         bool isLastChunk,
                                                         double ssimThreshold,
@@ -119,30 +120,60 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
         return result;
     }
 
+    // Helper: PTS for a working-frame local index (handles missing timestamps safely).
+    auto ptsAt = [&](int localIndex, const std::vector<double>& workingTimestamps) -> double {
+        if (localIndex < 0 || localIndex >= static_cast<int>(workingTimestamps.size())) {
+            return 0.0;
+        }
+        return workingTimestamps[static_cast<size_t>(localIndex)];
+    };
+
     // Step 1: Build working frames using single-frame overlap mechanism
     std::vector<cv::Mat> workingFrames;
+    std::vector<double> workingTimestamps;
     int startIndex = 0;
 
     if (state.isFirstChunk()) {
         // First chunk: use newFrames directly
         workingFrames = newFrames;
+        workingTimestamps = newTimestamps;
+        // Pad timestamps if decoder failed to provide a parallel vector
+        if (workingTimestamps.size() < workingFrames.size()) {
+            workingTimestamps.resize(workingFrames.size(), 0.0);
+        }
         startIndex = 0;
     } else {
         // Subsequent chunks: prepend lastFrame to newFrames
         workingFrames.reserve(newFrames.size() + 1);
+        workingTimestamps.reserve(newFrames.size() + 1);
         workingFrames.push_back(state.getLastFrameView());
+        workingTimestamps.push_back(state.lastFrameTimestamp);
         workingFrames.insert(workingFrames.end(), newFrames.begin(), newFrames.end());
+        if (newTimestamps.size() >= newFrames.size()) {
+            workingTimestamps.insert(workingTimestamps.end(),
+                                     newTimestamps.begin(),
+                                     newTimestamps.begin() + static_cast<std::ptrdiff_t>(newFrames.size()));
+        } else {
+            workingTimestamps.insert(workingTimestamps.end(), newTimestamps.begin(), newTimestamps.end());
+            workingTimestamps.resize(workingFrames.size(), state.lastFrameTimestamp);
+        }
         startIndex = 0; // Always start from comparing lastFrame vs newFrames[0]
     }
 
     // Step 2: Calculate SSIM scores for all adjacent frame pairs
     result.ssimScores = calculateSSIMScoresFromFrames(workingFrames, enableDownsampling, downsampleWidth, downsampleHeight);
 
+    // Timings recorded this chunk (keyed by global index for end-of-sequence alignment)
+    std::vector<ConfirmedSlideTiming> timingsThisChunk;
+
     // Step 3: Handle first frame (only for the very first chunk)
     if (state.isFirstChunk() && state.savedSlideIndices.empty() && !workingFrames.empty()) {
         // The first frame is saved by default
-        state.savedSlideIndices.push_back(state.globalFrameOffset);
-        state.lastStableIndex = state.globalFrameOffset;
+        const int gIdx = state.globalFrameOffset;
+        const double t0 = ptsAt(0, workingTimestamps);
+        state.savedSlideIndices.push_back(gIdx);
+        state.lastStableIndex = gIdx;
+        timingsThisChunk.push_back(ConfirmedSlideTiming{gIdx, t0, t0});
     }
 
     // Step 4: Main slide detection loop with verification state continuation
@@ -167,6 +198,15 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
                 } else {
                     potentialSlideGlobalIndex = state.globalFrameOffset + (potentialSlideLocalIndex - 1);
                 }
+            }
+            Q_UNUSED(potentialSlideGlobalIndex)
+
+            // Record transition PTS (keep across chunk if verification continues)
+            if (!(i == 0 && !state.isFirstChunk()
+                  && state.lastFrameVerificationState != VerificationState::NONE
+                  && state.hasPendingChangeAt)) {
+                state.pendingChangeAt = ptsAt(potentialSlideLocalIndex, workingTimestamps);
+                state.hasPendingChangeAt = true;
             }
 
             bool isStable = true;
@@ -232,16 +272,32 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
                     }
                 }
 
+                const double confirmedAt = ptsAt(newStableLocalIndex, workingTimestamps);
+                const double changeAt = state.hasPendingChangeAt ? state.pendingChangeAt : confirmedAt;
+
                 state.savedSlideIndices.push_back(newStableGlobalIndex);
                 state.lastStableIndex = newStableGlobalIndex;
+                timingsThisChunk.push_back(ConfirmedSlideTiming{newStableGlobalIndex, changeAt, confirmedAt});
+                state.hasPendingChangeAt = false;
+                state.pendingChangeAt = 0.0;
+
                 i = newStableLocalIndex; // Jump past the new stable frame
             } else {
-                // Verification failed
+                // Verification failed — unstable gap events deferred; drop pending only
+                // when we abort due to instability (not when waiting on next chunk).
                 if (verificationFailedAt == -1) {
                     // Verification reached the end of sequence before completion
+                    // (chunk boundary or true EOF). Keep pendingChangeAt if more chunks
+                    // may continue; clear only on last chunk.
+                    if (isLastChunk) {
+                        state.hasPendingChangeAt = false;
+                        state.pendingChangeAt = 0.0;
+                    }
                     i = static_cast<int>(result.ssimScores.size()); // End the main loop
                 } else {
                     // Restart detection from the point of instability
+                    state.hasPendingChangeAt = false;
+                    state.pendingChangeAt = 0.0;
                     i = verificationFailedAt;
                 }
             }
@@ -258,17 +314,37 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
         // For end-of-sequence handling, we need to construct a global view
         // Since we only have local SSIM scores, we'll use a simplified approach
         // that works with the available data
+        auto alreadySaved = [&](int gIdx) {
+            return std::find(state.savedSlideIndices.begin(), state.savedSlideIndices.end(), gIdx)
+                   != state.savedSlideIndices.end();
+        };
+
         if (state.lastStableIndex == totalFrameCount - 2) {
             // The second to last frame was a stable frame
             // Save the last frame regardless of similarity
-            state.savedSlideIndices.push_back(totalFrameCount - 1);
+            const int gIdx = totalFrameCount - 1;
+            if (!alreadySaved(gIdx)) {
+                state.savedSlideIndices.push_back(gIdx);
+                // Last frame of newFrames → local index in workingTimestamps
+                const int localInNew = static_cast<int>(newFrames.size()) - 1;
+                const int workLocal = state.isFirstChunk() ? localInNew : localInNew + 1;
+                const double t = ptsAt(workLocal, workingTimestamps);
+                timingsThisChunk.push_back(ConfirmedSlideTiming{gIdx, t, t});
+            }
         } else if (state.lastStableIndex == totalFrameCount - 3) {
             // The third to last frame was a stable frame
             // Check if the last two frames are the same (if we have the score)
             int lastScoreIndex = static_cast<int>(result.ssimScores.size()) - 1;
             if (lastScoreIndex >= 0 && result.ssimScores[lastScoreIndex] >= ssimThreshold) {
                 // Save if they are the same
-                state.savedSlideIndices.push_back(totalFrameCount - 1);
+                const int gIdx = totalFrameCount - 1;
+                if (!alreadySaved(gIdx)) {
+                    state.savedSlideIndices.push_back(gIdx);
+                    const int localInNew = static_cast<int>(newFrames.size()) - 1;
+                    const int workLocal = state.isFirstChunk() ? localInNew : localInNew + 1;
+                    const double t = ptsAt(workLocal, workingTimestamps);
+                    timingsThisChunk.push_back(ConfirmedSlideTiming{gIdx, t, t});
+                }
             }
         }
 
@@ -282,6 +358,11 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
     if (!newFrames.empty()) {
         state.setLastFrame(newFrames.back()); // Store a copy using FrameBuffer
         state.lastFrameGlobalIndex = state.globalFrameOffset + static_cast<int>(newFrames.size()) - 1;
+        if (!newTimestamps.empty()) {
+            // Prefer parallel timestamp; fall back to last known
+            const size_t tsIdx = std::min(newTimestamps.size(), newFrames.size()) - 1;
+            state.lastFrameTimestamp = newTimestamps[tsIdx];
+        }
     }
 
     // Update verification state based on current processing position
@@ -302,7 +383,25 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
         }
     }
 
+    // Align timings to chunk indices (preserve order of selectedSlideIndices)
     result.selectedSlideIndices = chunkSlideIndices;
+    result.confirmedSlideTimings.clear();
+    result.confirmedSlideTimings.reserve(chunkSlideIndices.size());
+    for (int gIdx : chunkSlideIndices) {
+        bool found = false;
+        for (const ConfirmedSlideTiming& t : timingsThisChunk) {
+            if (t.globalIndex == gIdx) {
+                result.confirmedSlideTimings.push_back(t);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            // Fallback: index known but timing lost — use 0s (should be rare)
+            result.confirmedSlideTimings.push_back(ConfirmedSlideTiming{gIdx, 0.0, 0.0});
+        }
+    }
+
     result.totalFramesProcessed = static_cast<int>(newFrames.size());
     result.processingTimeSeconds = timer.elapsed() / 1000.0;
 

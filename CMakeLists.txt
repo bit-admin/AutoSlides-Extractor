@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 1.2.2 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 2.0.0 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -434,6 +434,7 @@ set(SOURCES
     src/phashcalculator.cpp
     src/trashmanager.cpp
     src/trashmetadata.cpp
+    src/timelinemetadata.cpp
     src/cropmetadata.cpp
     src/cropmanager.cpp
     src/cropimageview.cpp
@@ -480,6 +481,7 @@ set(HEADERS
     src/trashentry.h
     src/trashmanager.h
     src/trashmetadata.h
+    src/timelinemetadata.h
     src/cropentry.h
     src/cropmetadata.h
     src/cropmanager.h

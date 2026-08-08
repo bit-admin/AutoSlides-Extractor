@@ -123,13 +123,21 @@ ProcessingTab::ProcessingTab(QWidget* parent)
     m_jpegQualitySpinBox->setSingleStep(5);
     m_jpegQualitySpinBox->setValue(95);
 
-    QLabel* outputHelpLabel = new QLabel("Higher values produce better quality images but larger file sizes.", this);
+    m_writeTimelineCheckBox = new QCheckBox("Write timeline.json (media time map)", this);
+    m_writeTimelineCheckBox->setChecked(true);
+
+    QLabel* outputHelpLabel = new QLabel(
+        "Higher JPEG values produce better quality images but larger file sizes. "
+        "timeline.json records media times for each saved slide so players can map "
+        "video time to the current image.",
+        this);
     outputHelpLabel->setWordWrap(true);
     outputHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
 
     outputLayout->addWidget(jpegQualityLabel, 0, 0);
     outputLayout->addWidget(m_jpegQualitySpinBox, 0, 1);
-    outputLayout->addWidget(outputHelpLabel, 1, 0, 1, 2);
+    outputLayout->addWidget(m_writeTimelineCheckBox, 1, 0, 1, 2);
+    outputLayout->addWidget(outputHelpLabel, 2, 0, 1, 2);
 
     tabLayout->addWidget(outputGroup);
     tabLayout->addStretch();
@@ -154,6 +162,7 @@ void ProcessingTab::load(const AppConfig& config)
 
     m_chunkSizeSpinBox->setValue(config.chunkSize);
     m_jpegQualitySpinBox->setValue(config.jpegQuality);
+    m_writeTimelineCheckBox->setChecked(config.writeTimeline);
 
     m_enableDownsamplingCheckBox->setChecked(config.enableDownsampling);
     m_downsampleWidthSpinBox->setValue(config.downsampleWidth);
@@ -168,6 +177,7 @@ void ProcessingTab::store(AppConfig& config) const
     config.customSSIMThreshold = m_customSSIMSpinBox->value();
     config.chunkSize = m_chunkSizeSpinBox->value();
     config.jpegQuality = m_jpegQualitySpinBox->value();
+    config.writeTimeline = m_writeTimelineCheckBox->isChecked();
     config.enableDownsampling = m_enableDownsamplingCheckBox->isChecked();
     config.downsampleWidth = m_downsampleWidthSpinBox->value();
     config.downsampleHeight = m_downsampleHeightSpinBox->value();

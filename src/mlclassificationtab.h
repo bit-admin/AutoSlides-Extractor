@@ -34,9 +34,12 @@ private slots:
     void onBrowseModel();
     void onUseDefaultModel();
     void onTest();
+    void updateMaybeSlideOptionEnabled();
 
 private:
     QCheckBox* m_deleteMaybeSlidesCheckBox = nullptr;
+    QCheckBox* m_autoCropMaybeSlidesCheckBox = nullptr;
+    QCheckBox* m_postCropDedupCheckBox = nullptr;
     QLineEdit* m_modelPathEdit = nullptr;
     QPushButton* m_browseModelButton = nullptr;
     QPushButton* m_useDefaultModelButton = nullptr;

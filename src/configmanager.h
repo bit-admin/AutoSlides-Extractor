@@ -58,6 +58,9 @@ struct AppConfig {
 
     // Output settings
     int jpegQuality;
+    // Write <slidesDir>/timeline.json (media time map). GUI default true;
+    // CLI forces false unless --write-timeline is passed.
+    bool writeTimeline;
 
     // CLI-only: compatibility mode for an external (Electron) consumer.
     // Strips "screen_" from the video name, uses "Slide_" file prefix,
@@ -73,6 +76,12 @@ struct AppConfig {
     // ML Classification settings
     bool enableMLClassification;
     bool mlDeleteMaybeSlides;  // true = delete may_be_slide images (default: true)
+    // Try auto-crop before trashing ML may_be_slide during post-process (GUI default true).
+    // CLI forces false unless --ml-autocrop-maybe is passed.
+    bool mlAutoCropMaybeSlides;
+    // After successful auto-crop, re-check those files for pHash duplicates (GUI default true).
+    // CLI forces false unless --ml-postcrop-dedup is passed.
+    bool mlPostCropDedup;
     QString mlModelPath;
     QString mlExecutionProvider;
 
@@ -87,7 +96,7 @@ struct AppConfig {
     // Shared threshold for slide class in medium confidence zone
     float mlSlideMaxThreshold;       // Delete if slide probability <= this (default: 0.25)
 
-    // Auto-crop settings (Slides Review viewer auto crop)
+    // Auto-crop settings (Slides Review viewer auto crop + post-process auto-crop)
     AutoCropConfig autoCrop;
 
     // Default values
@@ -103,12 +112,15 @@ struct AppConfig {
         downsampleHeight(270),
         chunkSize(100),
         jpegQuality(95),
+        writeTimeline(true),
         enablePostProcessing(true),
         deleteRedundant(true),
         compareExcluded(true),
         hammingThreshold(10),
         enableMLClassification(true),
         mlDeleteMaybeSlides(true),  // Default: delete may_be_slide images
+        mlAutoCropMaybeSlides(true),
+        mlPostCropDedup(true),
         mlModelPath(":/models/resources/models/slide_classifier_mobilenetv4_v1.onnx"),
         mlExecutionProvider("Auto"),
         mlNotSlideHighThreshold(0.9f),   // High confidence threshold
@@ -188,6 +200,7 @@ private:
     static const QString KEY_DOWNSAMPLE_HEIGHT;
     static const QString KEY_CHUNK_SIZE;
     static const QString KEY_JPEG_QUALITY;
+    static const QString KEY_WRITE_TIMELINE;
     static const QString KEY_ENABLE_POST_PROCESSING;
     static const QString KEY_DELETE_REDUNDANT;
     static const QString KEY_COMPARE_EXCLUDED;
@@ -197,6 +210,8 @@ private:
     static const QString KEY_EXCLUSION_HASH;
     static const QString KEY_ENABLE_ML_CLASSIFICATION;
     static const QString KEY_ML_DELETE_MAYBE_SLIDES;
+    static const QString KEY_ML_AUTOCROP_MAYBE_SLIDES;
+    static const QString KEY_ML_POST_CROP_DEDUP;
     static const QString KEY_ML_MODEL_PATH;
     static const QString KEY_ML_EXECUTION_PROVIDER;
     static const QString KEY_ML_NOT_SLIDE_HIGH_THRESHOLD;

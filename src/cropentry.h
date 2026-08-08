@@ -23,6 +23,7 @@ struct CropEntry {
     int cropW = 0;
     int cropH = 0;
     QDateTime timestamp;      // When the crop was applied / last updated
+    bool autoCropped = false; // true if applied by post-process auto-crop (not manual Review)
 
     CropEntry()
         : timestamp(QDateTime::currentDateTime()) {}
@@ -32,7 +33,8 @@ struct CropEntry {
               const QString& videoName,
               const QString& slideIndex,
               const QRect& cropRect,
-              const QDateTime& timestamp = QDateTime::currentDateTime())
+              const QDateTime& timestamp = QDateTime::currentDateTime(),
+              bool autoCropped = false)
         : backupFilename(backupFilename),
           originalFolder(originalFolder),
           videoName(videoName),
@@ -41,7 +43,8 @@ struct CropEntry {
           cropY(cropRect.y()),
           cropW(cropRect.width()),
           cropH(cropRect.height()),
-          timestamp(timestamp) {}
+          timestamp(timestamp),
+          autoCropped(autoCropped) {}
 
     QRect cropRect() const { return QRect(cropX, cropY, cropW, cropH); }
 

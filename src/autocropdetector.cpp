@@ -8,6 +8,11 @@
 #include <unordered_map>
 
 #include <opencv2/opencv.hpp>
+// OpenCV 5 moved arcLength/approxPolyDP/contourArea/boundingRect into geometry.hpp.
+// OpenCV 4 keeps them in imgproc (already pulled by opencv.hpp).
+#if defined(CV_VERSION_MAJOR) && (CV_VERSION_MAJOR >= 5)
+#include <opencv2/geometry.hpp>
+#endif
 #include "imageiohelper.h"
 
 namespace {

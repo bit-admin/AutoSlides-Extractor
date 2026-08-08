@@ -101,7 +101,8 @@ bool CropManager::findEntryForLivePath(const QString& livePath,
 bool CropManager::applyCrop(const QString& livePath,
                             const QString& baseOutputDir,
                             const QRect& cropRectImagePixels,
-                            int jpegQuality)
+                            int jpegQuality,
+                            bool autoCropped)
 {
     if (!QFile::exists(livePath)) {
         qWarning() << "CropManager: Live file does not exist:" << livePath;
@@ -201,7 +202,7 @@ bool CropManager::applyCrop(const QString& livePath,
     }
 
     CropEntry entry(backupFilename, liveFolder, videoName, slideIndex, rect,
-                    QDateTime::currentDateTime());
+                    QDateTime::currentDateTime(), autoCropped);
 
     if (!CropMetadata::updateEntry(cropDirectory(baseOutputDir), entry)) {
         qWarning() << "CropManager: Failed to update metadata for:" << backupFilename;

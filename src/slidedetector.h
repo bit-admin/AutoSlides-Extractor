@@ -9,9 +9,21 @@
 #include "chunkprocessor.h"
 #include "memoryoptimizer.h"
 
+/**
+ * @brief Media-time bounds for one confirmed (saved) slide in a chunk.
+ * changeAt = PTS of transition into the content; confirmedAt = PTS of accepted frame.
+ */
+struct ConfirmedSlideTiming {
+    int globalIndex = -1;
+    double changeAt = 0.0;
+    double confirmedAt = 0.0;
+};
+
 struct SlideDetectionResult {
     std::vector<std::string> selectedSlides;      // For file-based processing
     std::vector<int> selectedSlideIndices;        // For memory-based processing
+    // Parallel to selectedSlideIndices for this chunk (confirmed saves only).
+    std::vector<ConfirmedSlideTiming> confirmedSlideTimings;
     std::vector<double> ssimScores;
     int totalFramesProcessed;
     double processingTimeSeconds;
@@ -67,6 +79,7 @@ public:
      * Detect slides from a chunk of frames using the two-stage algorithm with state continuation
      * This method supports chunk-based processing for memory optimization
      * @param newFrames Vector of new frames for this chunk
+     * @param newTimestamps Media PTS seconds parallel to newFrames (same length preferred)
      * @param state Processing state that maintains continuity across chunks
      * @param isLastChunk Whether this is the final chunk in the sequence
      * @param ssimThreshold SSIM threshold for similarity detection
@@ -77,6 +90,7 @@ public:
      * @return SlideDetectionResult containing selected slide indices for this chunk
      */
     SlideDetectionResult detectSlidesFromChunk(const std::vector<cv::Mat>& newFrames,
+                                             const std::vector<double>& newTimestamps,
                                              ProcessingState& state,
                                              bool isLastChunk,
                                              double ssimThreshold,

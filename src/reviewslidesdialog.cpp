@@ -1,6 +1,7 @@
 #include "reviewslidesdialog.h"
 #include "trashmanager.h"
 #include "trashmetadata.h"
+#include "timelinemetadata.h"
 #include "cropmanager.h"
 #include "cropmetadata.h"
 #include "cropimageview.h"
@@ -958,8 +959,14 @@ void ReviewSlidesDialog::onRestoreSelected()
             continue;
         }
         QString trashedFilename = w->getTrashedFilename();
+        const TrashEntry& entry = w->getEntry();
+        const QString originalPath = entry.getOriginalPath(m_baseOutputDir);
         if (TrashManager::restoreFromApplicationTrash(trashedFilename, m_baseOutputDir)) {
             successCount++;
+            // Restore resolution to canonical for any matching capture event
+            TimelineMetadata::markRestore(
+                QFileInfo(originalPath).absolutePath(),
+                QFileInfo(originalPath).fileName());
         } else {
             failCount++;
             failedFiles.append(trashedFilename);
@@ -1003,6 +1010,10 @@ void ReviewSlidesDialog::onDeleteSelected()
         QString imagePath = w->getImagePath();
         if (TrashManager::moveToApplicationTrash(imagePath, m_baseOutputDir, "manual", "manual", "User deleted")) {
             successCount++;
+            TimelineMetadata::markGap(
+                QFileInfo(imagePath).absolutePath(),
+                QFileInfo(imagePath).fileName(),
+                QStringLiteral("manual_trash"));
         } else {
             failCount++;
             qWarning() << "ReviewSlidesDialog: Failed to move to trash:" << imagePath;
@@ -1386,6 +1397,9 @@ void ReviewSlidesDialog::onAutoCropSelected()
                 failedCount++;
                 continue;
             }
+            TimelineMetadata::markRestore(
+                QFileInfo(originalPath).absolutePath(),
+                QFileInfo(originalPath).fileName());
             if (!CropManager::applyCrop(originalPath, m_baseOutputDir, result.bbox, m_jpegQuality)) {
                 // File is restored but crop failed — count as failed; user can crop manually.
                 failedCount++;
