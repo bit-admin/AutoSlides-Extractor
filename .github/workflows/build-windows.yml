@@ -722,7 +722,7 @@ jobs:
           # Empty secret → github.token (needs contents:write). Non-empty PAT preferred.
           token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
           tag_name: v${{ steps.version.outputs.version }}
-          name: AutoSlides Extractor ${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
           draft: true
           prerelease: false
           generate_release_notes: true

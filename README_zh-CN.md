@@ -26,7 +26,7 @@
 ## 目录
 
 - [概览](#概览)
-- [1.2.0 新增内容](#120-新增内容)
+- [2.0.0 新增内容](#200-新增内容)
 - [功能特性](#功能特性)
 - [下载与安装](#下载与安装)
 - [快速开始](#快速开始)
@@ -54,16 +54,14 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 
 所有处理都在本机完成。视频解码、图像比较、机器学习推理、幻灯片复核、裁剪和 PDF 生成都运行在你的电脑上。
 
-## 1.2.0 新增内容
+## 2.0.0 新增内容
 
-1.2.0 将 AutoSlides Extractor 从单纯的幻灯片提取工具扩展成完整的复核和导出工作流：
+2.0.0 版本引入了媒体时间线元数据追踪、智能后处理自动裁剪以及优化的 Windows 发布包：
 
-- **Slides Review** 替代旧的 Trash Review，只看垃圾箱的流程变成了同时查看已保留和已移除幻灯片的统一复核界面。
-- **无损裁剪** 会先把原图备份到 `.extractorCrop/`，再用裁剪后的图片替换当前 `slide_*.jpg`。
-- **Auto Crop** 支持 Canny 边缘检测；如果构建时启用了 ONNX Runtime，还可以使用内置 YOLOv8 模型检测幻灯片区域。
-- **Baseline Crop** 可以把一张已裁剪幻灯片的裁剪框作为基准，按比例应用到同一演示中的其他图片。
-- **Slides Export** 支持把多个幻灯片文件夹导出成一个合并 PDF，或每个文件夹各导出一个 PDF。
-- **CLI 模式** 支持终端直接运行、JSON Lines 输出，以及 SIGINT/SIGTERM 的优雅取消。
+- **时间线 (`timeline.json`)**：在提取过程中同步生成视频媒体时间到幻灯片图片的映射文件，记录 I-frame PTS 时间戳，并维护可变的决议状态（`canonical`、`duplicate`、`gap`）。
+- **后处理自动裁剪**：在删除较模糊的 `may_be_slide` 疑似幻灯片前，自动识别幻灯片区域并进行无损裁剪保留，同时支持候选帧的二次 pHash 去重。
+- **新增 CLI 参数**：新增命令行标志 `--write-timeline`、`--ml-autocrop-maybe`、`--ml-postcrop-dedup` 和 `--compatible`。
+- **优化的 Windows 预构建包**：Windows 预构建版切换为 DirectML/CPU ONNX Runtime (`onnxruntime-win-x64`)，不再捆绑庞大的 NVIDIA CUDA 运行时 DLL，实现开箱即用的轻量化部署与 DirectML 硬件加速。
 
 完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -126,7 +124,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 不同版本的发布资产可能不同，通常包括：
 
 - **macOS**：优先使用 `.dmg` 安装包。
-- **Windows**：使用安装器或便携压缩包。
+- **Windows**：使用安装器或便携压缩包。预构建 Windows 发布包采用 DirectML 和 CPU ONNX Runtime 提供 GPU 硬件加速，无需额外安装或捆绑 CUDA 驱动与 DLL。
 - **Linux**：如果没有对应发行版包，请从源码构建。
 
 ### macOS Gatekeeper 提示
@@ -333,6 +331,14 @@ pHash 可以识别视觉上接近的图片，即使它们的像素并不完全�
 | `may_be_slide` low threshold | `0.75` |
 | 中等置信度删除时允许的最大 `slide` 概率 | `0.25` |
 
+### 后处理 `may_be_slide` 自动裁剪
+
+当启用 **Delete 'may_be_slide' Images** 时，应用可在将疑似帧移入垃圾箱前运行自动裁剪：
+
+1. **就地裁剪**：使用 `AutoCropDetector`（Canny/YOLO）检测 `may_be_slide` 帧上的幻灯片区域。若检测成功，则直接就地无损裁剪并保留（标记 `autoCropped=true`）。
+2. **裁剪后 pHash 二次去重**：自动裁剪保留的图片会进行候选帧 pHash 检测，防止与已有幻灯片重复。
+3. **设置项**：可在 Settings -> ML Classification 中配置（`mlAutoCropMaybeSlides` 和 `mlPostCropDedup`，GUI 默认开启）。
+
 ### Execution Provider
 
 不调试平台问题时，建议使用 **Auto**。
@@ -348,7 +354,7 @@ pHash 可以识别视觉上接近的图片，即使它们的像素并不完全�
 平台行为：
 
 - macOS 可使用 Core ML。
-- Windows 可使用 CUDA 或 DirectML。
+- Windows 预构建版本使用 DirectML（加速支持 DirectX 12 的 GPU）或 CPU；若从源码构建并配置 GPU ONNX 包，亦可使用 CUDA。
 - Linux 可使用 CUDA。
 - 所有平台都可以回退到 CPU，但速度较慢。
 
@@ -691,6 +697,10 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `--ml-maybe-slide-low` | float | `may_be_slide` low threshold。 |
 | `--ml-slide-max` | float | 中等置信度删除时允许的最大 `slide` 概率。 |
 | `--ml-delete-maybe-slides` | bool | 是否删除 `may_be_slide` 图片。 |
+| `--ml-autocrop-maybe` | flag | 在删除 `may_be_slide` 图片前自动裁剪，成功则保留。 |
+| `--ml-postcrop-dedup` | flag | 后处理自动裁剪后重新检测 pHash 重复项。 |
+| `--write-timeline` | flag | 在输出幻灯片文件夹中写入 `timeline.json` 媒体时间映射文件。 |
+| `--compatible` | flag | Electron 兼容模式（输出 PNG 幻灯片，去除 `screen_` 前缀，跳过后处理）。 |
 | `--json` | flag | 输出 JSON Lines 并关闭文本进度条。 |
 | `--help` | flag | 打印帮助。 |
 | `--version` | flag | 打印版本。 |
@@ -718,6 +728,7 @@ SlidesExtractor/
   slides_Lecture01/
     slide_Lecture01_001.jpg
     slide_Lecture01_002.jpg
+    timeline.json
   .extractorTrash/
     metadata.json
     slideRemoved_phash_Lecture01_003.jpg
@@ -745,6 +756,13 @@ slide_<video-base-name>_<three-digit-index>.jpg
 ```text
 slides_Lecture01/slide_Lecture01_001.jpg
 ```
+
+### 时间线映射文件 (timeline.json)
+
+当开启 **Write timeline.json** 时（GUI 默认开启，CLI 需传入 `--write-timeline`），每个 `slides_<video-name>/` 文件夹中都会包含 `timeline.json`，用于将视频媒体时间映射到提取的幻灯片图片：
+
+- **事件 (Events)**：捕获事件数组，记录 I-frame PTS 媒体时间（`changeAt`、`confirmedAt`）及 `initialFile` 基本文件名。
+- **决议 (Resolutions)**：可变的决议映射表，追踪幻灯片状态（`canonical`、`duplicate`、`gap`）。后处理与人工复核会更新决议状态（如 `duplicateOf`、`exclusion`、`ai_filtered`、`manual_trash`），而不会删除捕获事件，从而为播放器和下游应用提供稳定可追溯的时间线。
 
 ### 应用垃圾箱
 
@@ -872,11 +890,13 @@ CMake 会先检查 `vendor/` 下的平台专用 ONNX Runtime 目录，再尝试 
 ```text
 vendor/onnxruntime-osx-arm64-1.23.2/
 vendor/onnxruntime-osx-x86_64-1.23.2/
-vendor/onnxruntime-win-x64-gpu-1.23.2/
 vendor/onnxruntime-win-x64-1.23.2/
+vendor/onnxruntime-win-x64-gpu-1.23.2/
 vendor/onnxruntime-linux-x64-gpu-1.23.2/
 vendor/onnxruntime-linux-x64-1.23.2/
 ```
+
+*（注：Windows 预构建发布包使用 `onnxruntime-win-x64`（包含 DirectML 和 CPU 支持）以消除 CUDA 运行时依赖。如果从源码构建且需要 Windows 上的 CUDA 支持，请下载 GPU 版本 ONNX 包）。*
 
 如果找不到 ONNX Runtime，应用仍可构建，但 ML 分类和 YOLO Auto Crop 会禁用。
 

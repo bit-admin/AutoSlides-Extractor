@@ -64,8 +64,9 @@ CliTab::CliTab(QWidget* parent)
     usageLayout->setSpacing(8);
 
     QLabel* usageHelpLabel = new QLabel(
-        "Only --video and --output are required. Other flags default to the values "
-        "saved in this Settings dialog. Removed slides go to the application's review-able "
+        "Only --video and --output are required. Parameter thresholds default to the values "
+        "saved in this Settings dialog, while post-processing phases, auto-crop, and timeline output "
+        "are opt-in via CLI flags. Removed slides go to the application's review-able "
         "trash, so you can later open this app and use Slides Review.", this);
     usageHelpLabel->setWordWrap(true);
     usageHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
@@ -74,20 +75,30 @@ CliTab::CliTab(QWidget* parent)
     m_exampleText = new QPlainTextEdit(this);
     m_exampleText->setReadOnly(true);
     m_exampleText->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    m_exampleText->setMinimumHeight(180);
+    m_exampleText->setMinimumHeight(220);
     m_exampleText->setPlainText(
         "# Basic extraction (defaults from this Settings dialog)\n"
         "SlidesExtractor --video lecture.mp4 --output ~/Slides\n"
         "\n"
-        "# All three post-processing phases (uses the saved exclusion list from this dialog)\n"
+        "# Post-processing with pHash, ML, auto-crop may_be_slide & post-crop dedup\n"
         "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
         "    --phash-redundant \\\n"
         "    --phash-exclusion \\\n"
-        "    --ml-classify\n"
+        "    --ml-classify \\\n"
+        "    --ml-autocrop-maybe \\\n"
+        "    --ml-postcrop-dedup\n"
+        "\n"
+        "# Write timeline.json media-time map (I-frame PTS seconds)\n"
+        "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
+        "    --write-timeline\n"
         "\n"
         "# Phase 2 with an ad-hoc exclusion list (not saved back to GUI)\n"
         "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
         "    --phash-exclusion-hashes <64-char-hex>,<64-char-hex>\n"
+        "\n"
+        "# JSON event stream and Electron-compatible mode\n"
+        "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"
+        "    --json --compatible --write-timeline\n"
         "\n"
         "# Override SSIM threshold and JPEG quality for one run\n"
         "SlidesExtractor --video lecture.mp4 --output ~/Slides \\\n"

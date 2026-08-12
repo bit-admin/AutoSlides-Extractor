@@ -26,7 +26,7 @@
 ## Contents
 
 - [Overview](#overview)
-- [What Is New In 1.2.0](#what-is-new-in-120)
+- [What Is New In 2.0.0](#what-is-new-in-200)
 - [Features](#features)
 - [Download And Installation](#download-and-installation)
 - [Quick Start](#quick-start)
@@ -54,16 +54,14 @@ Instead of extracting frames at a fixed interval, the app analyzes visual simila
 
 The app is designed for local processing. Video decoding, image comparison, ML classification, review, cropping, and PDF generation run on your machine.
 
-## What Is New In 1.2.0
+## What Is New In 2.0.0
 
-Version 1.2.0 expands AutoSlides Extractor from a slide extraction tool into a complete review and export workflow:
+Version 2.0.0 introduces media-time timeline tracking, intelligent post-process auto-cropping, and optimized Windows releases:
 
-- **Slides Review** replaces the older trash-only review flow. It shows extracted and removed slides together, grouped by output folder.
-- **Non-destructive cropping** backs up original slide images in `.extractorCrop/` before replacing the live slide with a cropped version.
-- **Auto Crop** can detect the slide area with Canny edge detection and, when ONNX Runtime is available, a bundled YOLOv8 detector.
-- **Baseline Crop** lets you crop one slide, set it as a baseline, and apply the same proportional crop to other slides.
-- **Slides Export** creates either one combined PDF or one PDF per selected slide folder.
-- **CLI mode** runs extractions from the terminal, supports JSON Lines output, and handles cancellation cleanly.
+- **Timeline (`timeline.json`)**: Generates a colocated media-time -> slide map during extraction, recording I-frame PTS timings for slide transitions and maintaining mutable resolution statuses (`canonical`, `duplicate`, `gap`).
+- **Post-Process Auto-Crop**: Automatically detects slide regions on ambiguous `may_be_slide` captures before deletion—cropping and keeping valid slides instead of trashing them, with candidate-only post-crop pHash duplicate re-checking.
+- **New CLI Options**: Headless options including `--write-timeline`, `--ml-autocrop-maybe`, `--ml-postcrop-dedup`, and `--compatible`.
+- **Optimized Windows Release Package**: Windows prebuilt packages switch to DirectML/CPU ONNX Runtime (`onnxruntime-win-x64`), eliminating external NVIDIA CUDA redistributable DLLs for a lightweight, standalone installation while preserving hardware-accelerated ML inference out of the box via DirectML.
 
 See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 
@@ -126,7 +124,7 @@ Download release packages from the [GitHub Releases page](https://github.com/bit
 Available release assets may vary by version. In general:
 
 - **macOS**: use the `.dmg` package when provided.
-- **Windows**: use the installer or portable archive when provided.
+- **Windows**: use the installer or portable archive when provided. Prebuilt Windows packages use DirectML and CPU ONNX Runtime for hardware-accelerated ML inference without requiring CUDA drivers or external CUDA DLLs.
 - **Linux**: build from source unless a Linux package is published for your target distribution.
 
 ### macOS Gatekeeper Note
@@ -333,6 +331,14 @@ Defaults:
 | `may_be_slide` low threshold | `0.75` |
 | Max `slide` probability for medium-confidence deletion | `0.25` |
 
+### Post-Process Auto-Crop For `may_be_slide`
+
+When **Delete 'may_be_slide' Images** is enabled, the app can run post-process auto-cropping before sending an ambiguous frame to trash:
+
+1. **In-place Crop**: `AutoCropDetector` (Canny/YOLO) detects the slide area on the `may_be_slide` frame. If detection succeeds, the slide is cropped non-destructively in place and retained (`autoCropped=true`).
+2. **Post-Crop pHash Re-check**: Retained auto-cropped slides undergo a candidate-only pHash pass to ensure they are not duplicate copies of existing slides.
+3. **Settings**: Configurable via Settings -> ML Classification (`mlAutoCropMaybeSlides` and `mlPostCropDedup`, enabled by default in GUI).
+
 ### Execution Provider
 
 Use **Auto** unless you are debugging a platform-specific inference problem.
@@ -348,7 +354,7 @@ Provider options:
 Platform behavior:
 
 - macOS can use Core ML when supported by the ONNX Runtime build.
-- Windows can use CUDA or DirectML when available.
+- Windows uses DirectML (accelerated on DirectX 12 compatible GPUs) or CPU in prebuilt releases. CUDA acceleration is available when building from source with the GPU ONNX Runtime package.
 - Linux can use CUDA when available.
 - CPU fallback works on all platforms but is slower.
 
@@ -691,6 +697,10 @@ Common events:
 | `--ml-maybe-slide-low` | float | Low threshold for `may_be_slide`. |
 | `--ml-slide-max` | float | Maximum `slide` probability for medium-confidence deletion. |
 | `--ml-delete-maybe-slides` | bool | Whether to delete `may_be_slide` images. |
+| `--ml-autocrop-maybe` | flag | Auto-crop `may_be_slide` images before deletion and keep if crop succeeds. |
+| `--ml-postcrop-dedup` | flag | Re-check pHash duplicates after post-process auto-cropping. |
+| `--write-timeline` | flag | Write `timeline.json` media-time map in output slide folders. |
+| `--compatible` | flag | Electron-compatible mode (PNG slides, no `screen_` prefix, skips post-processing). |
 | `--json` | flag | Emit JSON Lines events and suppress the progress bar. |
 | `--help` | flag | Print help. |
 | `--version` | flag | Print version. |
@@ -718,6 +728,7 @@ SlidesExtractor/
   slides_Lecture01/
     slide_Lecture01_001.jpg
     slide_Lecture01_002.jpg
+    timeline.json
   .extractorTrash/
     metadata.json
     slideRemoved_phash_Lecture01_003.jpg
@@ -745,6 +756,13 @@ Example:
 ```text
 slides_Lecture01/slide_Lecture01_001.jpg
 ```
+
+### Timeline Map (timeline.json)
+
+When **Write timeline.json** is enabled (GUI default on; CLI opt-in via `--write-timeline`), each `slides_<video-name>/` folder includes a `timeline.json` mapping video media timestamps to extracted slide images:
+
+- **Events**: Array of capture events recording I-frame PTS media times (`changeAt`, `confirmedAt`) and `initialFile` basename.
+- **Resolutions**: Mutable resolution map tracking slide states (`canonical`, `duplicate`, `gap`). Post-processing and manual review update resolution statuses (e.g. `duplicateOf`, `exclusion`, `ai_filtered`, `manual_trash`) rather than deleting events, maintaining a stable media timeline history.
 
 ### Application Trash
 
@@ -872,11 +890,13 @@ Vendor examples:
 ```text
 vendor/onnxruntime-osx-arm64-1.23.2/
 vendor/onnxruntime-osx-x86_64-1.23.2/
-vendor/onnxruntime-win-x64-gpu-1.23.2/
 vendor/onnxruntime-win-x64-1.23.2/
+vendor/onnxruntime-win-x64-gpu-1.23.2/
 vendor/onnxruntime-linux-x64-gpu-1.23.2/
 vendor/onnxruntime-linux-x64-1.23.2/
 ```
+
+*(Note: Prebuilt Windows releases use `onnxruntime-win-x64` with DirectML/CPU support to eliminate CUDA runtime dependencies. If you need CUDA execution on Windows, download the GPU ONNX package when building from source).*
 
 If ONNX Runtime is missing, the app still builds. ML classification and YOLO Auto Crop are disabled.
 
