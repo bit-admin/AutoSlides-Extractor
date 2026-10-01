@@ -709,6 +709,11 @@ jobs:
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Never replace an asset that is already on the release: a re-run against a
+          # published version (e.g. a Linux-only change merged after v<ver> shipped)
+          # must not swap the Windows binaries users already downloaded. To refresh a
+          # draft's Windows files, delete them from the draft first.
+          overwrite_files: false
           files: |
             build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Portable.zip
             build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe
