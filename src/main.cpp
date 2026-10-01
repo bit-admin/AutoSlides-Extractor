@@ -2,6 +2,10 @@
 #include <QCoreApplication>
 #include <QStyleFactory>
 #include <QStringList>
+#ifdef Q_OS_LINUX
+#include <QFileInfo>
+#include <QIcon>
+#endif
 #include "mainwindow.h"
 #include "clirunner.h"
 
@@ -69,6 +73,18 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
     setApplicationProperties();
+
+#ifdef Q_OS_LINUX
+    // Windows/macOS take the icon from the .rc/.icns. On Linux, match the installed
+    // .desktop entry (Wayland app_id) and load the icon installed next to the binary
+    // (AppImage / `cmake --install` layout), falling back to the icon theme.
+    QGuiApplication::setDesktopFileName(QStringLiteral("AutoSlidesExtractor"));
+    const QString bundledIcon = QCoreApplication::applicationDirPath()
+        + QStringLiteral("/../share/icons/hicolor/256x256/apps/AutoSlidesExtractor.png");
+    app.setWindowIcon(QFileInfo::exists(bundledIcon)
+                          ? QIcon(bundledIcon)
+                          : QIcon::fromTheme(QStringLiteral("AutoSlidesExtractor")));
+#endif
 
     // Set a modern style
     app.setStyle(QStyleFactory::create("Fusion"));

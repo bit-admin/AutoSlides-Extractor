@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🚀 Added
+- **Linux release build**: New `Build Linux Release` workflow producing an x86_64 AppImage and a portable `.tar.gz` (vcpkg OpenCV/FFmpeg from the same `vcpkg.json` as Windows, Qt 6.8, CPU ONNX Runtime; built on Ubuntu 22.04 for glibc 2.35+). Packaging lives in `installer/package-linux.sh` and can be run locally.
+- **Linux desktop integration**: `.desktop` entry and 256 px icon, installed by `cmake --install`; the GUI sets its window icon and desktop file name on Linux.
+
+### 🐛 Fixed
+- **CLI install from an AppImage**: The `SlidesExtractor` wrapper now targets the `.AppImage` file (`$APPIMAGE`) instead of the per-launch `/tmp/.mount_*` path, which stopped working once the app exited.
+
+---
+
 ## [2.0.0] - 2026-08-08
 
 ### 🚀 Added

@@ -125,7 +125,7 @@ Available release assets may vary by version. In general:
 
 - **macOS**: use the `.dmg` package when provided.
 - **Windows**: use the installer or portable archive when provided. Prebuilt Windows packages use DirectML and CPU ONNX Runtime for hardware-accelerated ML inference without requiring CUDA drivers or external CUDA DLLs.
-- **Linux**: build from source unless a Linux package is published for your target distribution.
+- **Linux**: use the `.AppImage` (`chmod +x` it, then run it) or the portable `.tar.gz` (extract, then run `./AutoSlidesExtractor`). Prebuilt Linux packages target x86_64 CPUs with AVX2 and glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer), and use CPU ONNX Runtime. If the AppImage reports a FUSE error, install `libfuse2` or run it with `--appimage-extract-and-run`. Other systems can build from source.
 
 ### macOS Gatekeeper Note
 
@@ -899,6 +899,16 @@ vendor/onnxruntime-linux-x64-1.23.2/
 *(Note: Prebuilt Windows releases use `onnxruntime-win-x64` with DirectML/CPU support to eliminate CUDA runtime dependencies. If you need CUDA execution on Windows, download the GPU ONNX package when building from source).*
 
 If ONNX Runtime is missing, the app still builds. ML classification and YOLO Auto Crop are disabled.
+
+### Linux Packaging
+
+`installer/package-linux.sh` turns a Linux build into an AppImage and a portable tarball (the same script runs in CI):
+
+```bash
+QMAKE=/path/to/Qt/bin/qmake installer/package-linux.sh build
+```
+
+`cmake --install` also installs the `.desktop` entry and icon on Linux. For a binary meant to run on other machines, configure with `-DCOMPILER_SUPPORTS_AVX512=OFF`: otherwise CMake enables AVX-512 whenever the compiler supports it, and the binary crashes on CPUs without AVX-512.
 
 ## Troubleshooting
 

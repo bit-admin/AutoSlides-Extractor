@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=AutoSlides Extractor
+GenericName=Slide Extractor
+Comment=Extract slide images from video presentations
+Exec=AutoSlidesExtractor
+Icon=AutoSlidesExtractor
+Terminal=false
+Categories=Office;Presentation;
+Keywords=slides;lecture;presentation;video;extract;
