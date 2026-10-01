@@ -1,0 +1,335 @@
+# Build + package AutoSlides Extractor for Linux x86_64 (AppImage, portable tar.gz, .deb).
+#
+# Mirrors build-windows.yml:
+#   - same pinned vcpkg + vcpkg.json (minimal OpenCV/FFmpeg features), so the
+#     bundle does not drag in distro OpenCV's GDAL/HDF5/... dependency tree
+#   - x64-linux-dynamic triplet: FFmpeg/OpenCV ship as .so next to the app,
+#     like the DLLs on Windows (keeps FFmpeg dynamically linked for LGPL)
+#   - packaging lives in installer/package-linux.sh (runnable locally): deps are
+#     discovered from the built binary, missing critical libs fail the build
+#   - version comes from CMakeLists.txt
+#
+# Linux specifics:
+#   - Built on ubuntu-22.04 so the bundle runs on glibc >= 2.35 (Ubuntu 22.04+,
+#     Debian 12+, Fedora 36+, ...). Building on a newer runner raises that floor.
+#   - COMPILER_SUPPORTS_AVX512=OFF: CMakeLists enables -mavx512f whenever GCC
+#     *accepts* the flag. Runners have AVX-512, so CI would pass while the binary
+#     dies with SIGILL on most desktop CPUs. AVX2 stays on (the SSIM path uses
+#     AVX2 intrinsics on Windows too).
+#   - ONNX Runtime CPU package (no CUDA redistributable), like the Windows portable.
+#
+# Artifacts:
+#   AutoSlides.Extractor-<ver>-Linux-x86_64.AppImage
+#   AutoSlides.Extractor-<ver>-Linux-x86_64-Portable.tar.gz
+#   AutoSlides.Extractor-<ver>-Linux-x86_64.deb   (same bundle in /opt; Depends
+#     resolved against ubuntu-22.04 package names, so it installs on 22.04+/Debian 12+)
+# Draft release (push to main / workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
+#
+# Caching (restore early, SAVE right after each success so a later failure
+# does not throw away a cold FFmpeg/OpenCV compile):
+#   - Qt: install-qt-action
+#   - vcpkg-bincache (files layer), ONNX vendor, linuxdeploy tools
+
+name: Build Linux Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: linux-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Do NOT cancel an in-progress first-time vcpkg compile (see build-windows.yml).
+  cancel-in-progress: false
+
+permissions:
+  # contents:write required for softprops/action-gh-release when using github.token.
+  contents: write
+
+env:
+  QT_VERSION: "6.8.3"
+  ONNXRUNTIME_VERSION: "1.23.2"
+  # CPU build (no CUDA redistributable). Folder name matches CMakeLists vendor lookup.
+  ONNX_PACKAGE: "onnxruntime-linux-x64"
+  # Same pin as build-windows.yml (FFmpeg 8.1.2, OpenCV 4.12.0). Bump intentionally.
+  VCPKG_COMMIT: "2026.07.29"
+  VCPKG_TRIPLET: "x64-linux-dynamic"
+  VCPKG_ROOT: "/home/runner/vcpkg"
+  VCPKG_DISABLE_METRICS: "1"
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
+  LINUXDEPLOY_TOOLS: "/home/runner/linuxdeploy-tools"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read app version from CMakeLists.txt
+        id: version
+        run: |
+          ver="$(sed -nE 's/^project\(AutoSlidesExtractor VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          [ -n "$ver" ] || { echo "::error::Could not parse project VERSION from CMakeLists.txt"; exit 1; }
+          echo "APP_VERSION=$ver"
+          echo "APP_VERSION=$ver" >> "$GITHUB_ENV"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      # Build tools for the vcpkg ports, libraries Qt's xcb plugin links against
+      # (linuxdeploy must resolve them to bundle the plugin), and Xvfb + ffmpeg for
+      # the smoke tests at the end.
+      - name: Install system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build pkg-config nasm autoconf autoconf-archive \
+            automake libtool curl zip unzip tar patchelf file desktop-file-utils \
+            libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libxkbcommon-x11-0 \
+            libfontconfig1 libfreetype6 libdbus-1-3 libx11-xcb1 libxcb1 \
+            libxcb-cursor0 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0 \
+            libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 \
+            libxcb-xkb1 xvfb xauth ffmpeg
+
+      # vcpkg package ABI includes the compiler; put it in the cache key.
+      - name: Detect GCC version (vcpkg cache key)
+        id: gcc
+        run: echo "version=$(gcc -dumpfullversion)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: "linux"
+          target: "desktop"
+          arch: "linux_gcc_64"
+          # icu is a separate archive on Linux and Qt Core needs it.
+          archives: "qtbase qtsvg icu"
+          cache: true
+          cache-key-prefix: "qt-${{ env.QT_VERSION }}-linux-gcc64-base-svg-icu"
+
+      - name: Restore vcpkg binary packages
+        id: restore-vcpkg-bin
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-gcc${{ steps.gcc.outputs.version }}-g1
+          restore-keys: |
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-gcc${{ steps.gcc.outputs.version }}-
+
+      - name: Setup vcpkg (pinned)
+        run: |
+          # No builtin-baseline in vcpkg.json, so a shallow checkout of the tag is enough.
+          git clone --depth 1 --branch "$VCPKG_COMMIT" https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          "$VCPKG_ROOT/vcpkg" version
+          mkdir -p "$GITHUB_WORKSPACE/vcpkg-bincache"
+
+      - name: Install vcpkg dependencies
+        id: vcpkg-install
+        run: |
+          echo "This step compiles OpenCV/FFmpeg on a cold cache (can take a long time)."
+          log="$RUNNER_TEMP/vcpkg-install.log"
+          set -o pipefail
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet "$VCPKG_TRIPLET" \
+            --x-manifest-root=. \
+            --x-install-root=build/vcpkg_installed 2>&1 | tee "$log"
+          # Did we compile anything from source? If yes, the bincache has new packages.
+          if grep -qE '^Building (ffmpeg|opencv4)' "$log"; then
+            echo "did_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "did_build=false" >> "$GITHUB_OUTPUT"
+          fi
+          ls "build/vcpkg_installed/$VCPKG_TRIPLET/lib"
+
+      # Save right away; do not skip just because restore reported a hit
+      # (a partial-key hit can still have rebuilt ffmpeg).
+      - name: Save vcpkg binary package cache
+        if: success() && (steps.restore-vcpkg-bin.outputs.cache-hit != 'true' || steps.vcpkg-install.outputs.did_build == 'true')
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-gcc${{ steps.gcc.outputs.version }}-g1
+
+      - name: Restore ONNX Runtime
+        id: restore-onnx
+        uses: actions/cache/restore@v4
+        with:
+          path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+
+      - name: Download ONNX Runtime (CPU)
+        if: steps.restore-onnx.outputs.cache-hit != 'true'
+        run: |
+          name="$ONNX_PACKAGE-$ONNXRUNTIME_VERSION"
+          url="https://github.com/microsoft/onnxruntime/releases/download/v$ONNXRUNTIME_VERSION/$name.tgz"
+          echo "Downloading $url"
+          mkdir -p vendor
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tgz" "$url"
+          tar -xzf "$RUNNER_TEMP/$name.tgz" -C vendor
+          rm -f "$RUNNER_TEMP/$name.tgz"
+
+      - name: Verify ONNX Runtime present
+        run: |
+          lib="vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib/libonnxruntime.so.$ONNXRUNTIME_VERSION"
+          [ -f "$lib" ] || { echo "::error::$lib missing after cache/download"; exit 1; }
+          if compgen -G "vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib/*cuda*" > /dev/null; then
+            echo "::error::CUDA ORT artifacts present in CPU vendor tree"; exit 1
+          fi
+          ls -la "vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib"
+
+      - name: Save ONNX Runtime cache
+        if: success() && steps.restore-onnx.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/build/vcpkg_installed" \
+            -DVCPKG_MANIFEST_INSTALL=OFF \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCOMPILER_SUPPORTS_AVX512=OFF
+
+          # Fail if a system OpenCV/FFmpeg was picked up instead of the vcpkg build
+          # (the bundle would then pull in the distro dependency tree).
+          cache=build/CMakeCache.txt
+          grep -E '^(OpenCV_DIR|FFMPEG_libavcodec_LIBDIR|COMPILER_SUPPORTS_AVX)' "$cache" || true
+          grep -qE "^OpenCV_DIR:.*vcpkg_installed/$VCPKG_TRIPLET" "$cache" \
+            || { echo "::error::OpenCV not resolved from vcpkg"; exit 1; }
+          grep -qE "^FFMPEG_libavcodec_LIBDIR:.*vcpkg_installed/$VCPKG_TRIPLET" "$cache" \
+            || { echo "::error::FFmpeg not resolved from vcpkg"; exit 1; }
+          grep -qE '^COMPILER_SUPPORTS_AVX512:[A-Z]*=OFF$' "$cache" \
+            || { echo "::error::AVX-512 must stay off for release builds"; exit 1; }
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Restore linuxdeploy tools
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.LINUXDEPLOY_TOOLS }}
+          # Tool URLs are pinned in the script; a change there busts this key.
+          key: linuxdeploy-${{ hashFiles('installer/package-linux.sh') }}
+
+      - name: Package AppImage + portable tarball
+        run: |
+          QMAKE="$QT_ROOT_DIR/bin/qmake" \
+          TOOLS_DIR="$LINUXDEPLOY_TOOLS" \
+          LIB_DIRS="$GITHUB_WORKSPACE/build/vcpkg_installed/$VCPKG_TRIPLET/lib" \
+            installer/package-linux.sh build
+
+      # Bundle must be self-contained: run with no build paths on LD_LIBRARY_PATH,
+      # on a synthetic two-slide H.264 video, then check the GUI starts on xcb.
+      - name: Verify package
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          set -euo pipefail
+          app="$PWD/build/AutoSlides.Extractor-$APP_VERSION-Linux-x86_64.AppImage"
+          unset LD_LIBRARY_PATH
+
+          "$app" --version
+
+          work="$RUNNER_TEMP/smoke"
+          rm -rf "$work" && mkdir -p "$work" && cd "$work"
+          # Three static "slides", 12 s each, I-frame every 2 s.
+          ffmpeg -loglevel error \
+                 -f lavfi -i "smptebars=s=1280x720:r=30:d=12" \
+                 -f lavfi -i "rgbtestsrc=s=1280x720:r=30:d=12" \
+                 -f lavfi -i "color=c=0x1f3a68:s=1280x720:r=30:d=12" \
+                 -filter_complex "[0:v][1:v][2:v]concat=n=3:v=1,format=yuv420p" \
+                 -c:v libx264 -g 60 lecture.mp4
+          "$app" --video lecture.mp4 --output out --json --phash-redundant --ml-classify --write-timeline \
+            | tee events.ndjson
+          done_line="$(grep '"event":"done"' events.ndjson)"
+          echo "$done_line" | grep -q '"exitCode":0' || { echo "::error::CLI smoke test failed"; exit 1; }
+          count="$(echo "$done_line" | sed -E 's/.*"slideCount":([0-9]+).*/\1/')"
+          [ "$count" -ge 2 ] || { echo "::error::expected >= 2 slides, got $count"; exit 1; }
+          [ -f out/slides_lecture/timeline.json ] || { echo "::error::timeline.json missing"; exit 1; }
+
+          # GUI: still running after a few seconds == platform plugin + main window OK.
+          set +e
+          timeout 20 xvfb-run -a "$app" > gui.log 2>&1
+          code=$?
+          set -e
+          cat gui.log
+          [ "$code" -eq 124 ] || { echo "::error::GUI exited early with code $code"; exit 1; }
+          echo "Verify OK"
+
+      # Install the .deb like a user would (apt resolves its Depends) and run the
+      # installed /usr/bin entry point on the same smoke video.
+      - name: Verify .deb
+        run: |
+          set -euo pipefail
+          deb="$PWD/build/AutoSlides.Extractor-$APP_VERSION-Linux-x86_64.deb"
+          [ -f "$deb" ] || { echo "::error::$deb not produced"; exit 1; }
+          dpkg-deb --info "$deb"
+          sudo apt-get install -y --no-install-recommends "$deb"
+          [ -f /usr/share/applications/AutoSlidesExtractor.desktop ] \
+            || { echo "::error::desktop entry not installed"; exit 1; }
+          unset LD_LIBRARY_PATH
+          /usr/bin/AutoSlidesExtractor --version
+          cd "$RUNNER_TEMP/smoke"
+          rm -rf out-deb
+          /usr/bin/AutoSlidesExtractor --video lecture.mp4 --output out-deb --json --phash-redundant \
+            | grep '"event":"done"' | grep -q '"exitCode":0' \
+            || { echo "::error::CLI from installed .deb failed"; exit 1; }
+          sudo apt-get remove -y autoslides-extractor
+          echo "Verify .deb OK"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-AppImage
+          path: build/AutoSlides.Extractor-*-Linux-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-Portable
+          path: build/AutoSlides.Extractor-*-Linux-x86_64-Portable.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-deb
+          path: build/AutoSlides.Extractor-*-Linux-x86_64.deb
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      # Draft GitHub Release, same tag as the Windows workflow so both platforms'
+      # assets land on one draft. Only from main or a manual run.
+      - name: Create draft release
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64.AppImage
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-Portable.tar.gz
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64.deb

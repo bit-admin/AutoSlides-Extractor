@@ -608,3 +608,11 @@ install(TARGETS AutoSlidesExtractor
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+# Linux desktop integration (also the AppDir layout used by installer/package-linux.sh)
+if(UNIX AND NOT APPLE)
+    install(FILES resources/AutoSlidesExtractor.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES resources/AutoSlidesExtractor.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+endif()

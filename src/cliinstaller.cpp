@@ -120,6 +120,15 @@ QString CliInstaller::commandName()
 
 QString CliInstaller::currentExecutablePath()
 {
+#ifdef Q_OS_LINUX
+    // Inside an AppImage the binary lives in a per-launch mount (/tmp/.mount_*) that
+    // disappears on exit. The runtime exports APPIMAGE with the path of the .AppImage
+    // file itself, which forwards its arguments, so the wrapper must target that.
+    const QString appImage = qEnvironmentVariable("APPIMAGE");
+    if (!appImage.isEmpty() && QFileInfo(appImage).isExecutable()) {
+        return appImage;
+    }
+#endif
     return QCoreApplication::applicationFilePath();
 }
 
