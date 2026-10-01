@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux release build**: New `Build Linux Release` workflow producing an x86_64 AppImage and a portable `.tar.gz` (vcpkg OpenCV/FFmpeg from the same `vcpkg.json` as Windows, Qt 6.8, CPU ONNX Runtime; built on Ubuntu 22.04 for glibc 2.35+). Packaging lives in `installer/package-linux.sh` and can be run locally.
 - **Linux desktop integration**: `.desktop` entry and 256 px icon, installed by `cmake --install`; the GUI sets its window icon and desktop file name on Linux.
 
+### 🔄 Changed
+- **vcpkg pin `2025.04.09` → `2026.07.29`** (Windows and Linux CI): FFmpeg 7.1.1 → 8.1.2, OpenCV 4.11.0 → 4.12.0. The old pin could no longer build FFmpeg on Windows because its MSYS2 package (`file-5.45-3`) was removed from all mirrors. The Windows workflow drops vcpkg's `x-gha` binary cache, which current vcpkg-tool no longer supports, and keeps the `actions/cache` files layer.
+
 ### 🐛 Fixed
 - **CLI install from an AppImage**: The `SlidesExtractor` wrapper now targets the `.AppImage` file (`$APPIMAGE`) instead of the per-launch `/tmp/.mount_*` path, which stopped working once the app exited.
 

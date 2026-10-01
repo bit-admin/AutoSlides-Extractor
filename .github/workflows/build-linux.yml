@@ -51,8 +51,8 @@ env:
   ONNXRUNTIME_VERSION: "1.23.2"
   # CPU build (no CUDA redistributable). Folder name matches CMakeLists vendor lookup.
   ONNX_PACKAGE: "onnxruntime-linux-x64"
-  # Same pin as build-windows.yml. Bump intentionally.
-  VCPKG_COMMIT: "2025.04.09"
+  # Same pin as build-windows.yml (FFmpeg 8.1.2, OpenCV 4.12.0). Bump intentionally.
+  VCPKG_COMMIT: "2026.07.29"
   VCPKG_TRIPLET: "x64-linux-dynamic"
   VCPKG_ROOT: "/home/runner/vcpkg"
   VCPKG_DISABLE_METRICS: "1"
