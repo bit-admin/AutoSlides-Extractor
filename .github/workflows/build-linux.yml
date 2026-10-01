@@ -1,4 +1,4 @@
-# Build + package AutoSlides Extractor for Linux x86_64 (AppImage + portable tar.gz).
+# Build + package AutoSlides Extractor for Linux x86_64 (AppImage, portable tar.gz, .deb).
 #
 # Mirrors build-windows.yml:
 #   - same pinned vcpkg + vcpkg.json (minimal OpenCV/FFmpeg features), so the
@@ -21,6 +21,8 @@
 # Artifacts:
 #   AutoSlides.Extractor-<ver>-Linux-x86_64.AppImage
 #   AutoSlides.Extractor-<ver>-Linux-x86_64-Portable.tar.gz
+#   AutoSlides.Extractor-<ver>-Linux-x86_64.deb   (same bundle in /opt; Depends
+#     resolved against ubuntu-22.04 package names, so it installs on 22.04+/Debian 12+)
 # Draft release (push to main / workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
 #
 # Caching (restore early, SAVE right after each success so a later failure
@@ -266,6 +268,27 @@ jobs:
           [ "$code" -eq 124 ] || { echo "::error::GUI exited early with code $code"; exit 1; }
           echo "Verify OK"
 
+      # Install the .deb like a user would (apt resolves its Depends) and run the
+      # installed /usr/bin entry point on the same smoke video.
+      - name: Verify .deb
+        run: |
+          set -euo pipefail
+          deb="$PWD/build/AutoSlides.Extractor-$APP_VERSION-Linux-x86_64.deb"
+          [ -f "$deb" ] || { echo "::error::$deb not produced"; exit 1; }
+          dpkg-deb --info "$deb"
+          sudo apt-get install -y --no-install-recommends "$deb"
+          [ -f /usr/share/applications/AutoSlidesExtractor.desktop ] \
+            || { echo "::error::desktop entry not installed"; exit 1; }
+          unset LD_LIBRARY_PATH
+          /usr/bin/AutoSlidesExtractor --version
+          cd "$RUNNER_TEMP/smoke"
+          rm -rf out-deb
+          /usr/bin/AutoSlidesExtractor --video lecture.mp4 --output out-deb --json --phash-redundant \
+            | grep '"event":"done"' | grep -q '"exitCode":0' \
+            || { echo "::error::CLI from installed .deb failed"; exit 1; }
+          sudo apt-get remove -y autoslides-extractor
+          echo "Verify .deb OK"
+
       - name: Upload AppImage artifact
         uses: actions/upload-artifact@v4
         with:
@@ -280,6 +303,15 @@ jobs:
         with:
           name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-Portable
           path: build/AutoSlides.Extractor-*-Linux-x86_64-Portable.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-deb
+          path: build/AutoSlides.Extractor-*-Linux-x86_64.deb
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
@@ -300,3 +332,4 @@ jobs:
           files: |
             build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64.AppImage
             build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-Portable.tar.gz
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64.deb

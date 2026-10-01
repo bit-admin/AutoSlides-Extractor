@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Package AutoSlides Extractor for Linux x86_64 (AppImage + portable tar.gz).
+# Package AutoSlides Extractor for Linux x86_64 (AppImage, portable tar.gz, .deb).
 #
 # Packaging philosophy matches the Windows workflow / package-macos.sh:
 #   - discover deps from the built binary (no hardcoded OpenCV/FFmpeg sonames)
@@ -15,6 +15,7 @@
 #   OUT_DIR     where the artifacts are written (default: <build-dir>)
 #   TOOLS_DIR   cache for the linuxdeploy AppImages (default: <build-dir>/tools)
 #   LIB_DIRS    extra ':'-separated dirs holding shared libs to bundle (e.g. vcpkg lib)
+#   DEB_MAINTAINER  Maintainer field of the .deb
 #
 # Library search paths are otherwise taken from the RUNPATH CMake gives the build-tree
 # binary (ONNX Runtime vendor dir, OpenCV). FFmpeg is linked by name via pkg-config, so
@@ -23,6 +24,7 @@
 # Artifacts:
 #   AutoSlides.Extractor-<ver>-Linux-x86_64.AppImage
 #   AutoSlides.Extractor-<ver>-Linux-x86_64-Portable.tar.gz
+#   AutoSlides.Extractor-<ver>-Linux-x86_64.deb      (when dpkg-deb is available)
 
 set -euo pipefail
 
@@ -167,6 +169,93 @@ Notes:
 EOF
 tar -C "$BUILD_DIR/portable" -czf "$OUT_DIR/$BASENAME-Portable.tar.gz" "$BASENAME"
 
+# --- Debian package -------------------------------------------------------------
+# Self-contained like the AppImage (one .deb for every Debian/Ubuntu release with a new
+# enough glibc): the bundled tree goes to /opt, with a /usr/bin symlink and the desktop
+# entry + icon in /usr/share. Depends lists only the host libraries the bundle leaves
+# out (glibc, libGL, X11, fontconfig, ...), mapped to the build host's package names,
+# so build on the oldest distro you support.
+DEB_PACKAGE=autoslides-extractor
+DEB_PREFIX="/opt/$DEB_PACKAGE"
+
+# Print the dpkg package owning a shared library path (tries usrmerge path variants).
+deb_owner() {
+    local x c out
+    for x in "$1" "$(readlink -f "$1")"; do
+        for c in "$x" "/usr${x#/usr}" "${x#/usr}"; do
+            out="$(dpkg -S "$c" 2>/dev/null | head -1)" || continue
+            [ -n "$out" ] && { echo "${out%%:*}"; return 0; }
+        done
+    done
+    return 1
+}
+
+if command -v dpkg-deb > /dev/null && command -v dpkg > /dev/null; then
+    DEB_ROOT="$BUILD_DIR/deb/root"
+    rm -rf "$BUILD_DIR/deb"
+    mkdir -p "$DEB_ROOT$DEB_PREFIX" "$DEB_ROOT/usr/bin" "$DEB_ROOT/DEBIAN" \
+             "$DEB_ROOT/usr/share/applications" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps" \
+             "$DEB_ROOT/usr/share/doc/$DEB_PACKAGE"
+    # usr/bin, usr/lib, usr/plugins, usr/share/icons: qt.conf, the $ORIGIN rpaths and the
+    # window-icon lookup in main.cpp are all relative, so the tree works from /opt.
+    cp -a "$APPDIR/usr/." "$DEB_ROOT$DEB_PREFIX/"
+    rm -rf "$DEB_ROOT$DEB_PREFIX/share/applications"
+    ln -s "$DEB_PREFIX/bin/$APP" "$DEB_ROOT/usr/bin/$APP"
+    install -m 644 "$DESKTOP" "$DEB_ROOT/usr/share/applications/$APP.desktop"
+    install -m 644 "$ICON" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/$APP.png"
+    install -m 644 "$ROOT/LICENSE" "$DEB_ROOT/usr/share/doc/$DEB_PACKAGE/copyright"
+
+    # Sonames needed by any bundled ELF file but not bundled themselves.
+    bundled="$(find "$DEB_ROOT$DEB_PREFIX/lib" -maxdepth 1 -name '*.so*' -printf '%f\n' | sort -u)"
+    # readelf exits non-zero on the non-ELF files (images, qt.conf); only NEEDED matters.
+    needed="$({ find "$DEB_ROOT$DEB_PREFIX" -type f -print0 |
+        xargs -0 -n 50 readelf -d 2>/dev/null || true; } |
+        sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | sort -u)"
+    host_libs="$(comm -23 <(echo "$needed") <(echo "$bundled"))"
+
+    deps=()
+    for soname in $host_libs; do
+        path="$(ldconfig -p | awk -v s="$soname" '$1 == s && /x86-64/ { print $NF; exit }')"
+        [ -n "$path" ] || die "host library $soname not found (install it on the build host)"
+        pkg="$(deb_owner "$path")" || die "no package owns $path ($soname)"
+        [ "$pkg" = libc6 ] || deps+=("$pkg")
+    done
+    depends="libc6 (>= ${GLIBC_MIN:?})"
+    for pkg in $(printf '%s\n' "${deps[@]}" | sort -u); do
+        depends="$depends, $pkg"
+    done
+    echo "Depends:   $depends"
+
+    cat > "$DEB_ROOT/DEBIAN/control" <<EOF
+Package: $DEB_PACKAGE
+Version: $VERSION
+Architecture: amd64
+Maintainer: ${DEB_MAINTAINER:-bit-admin <169052100+bit-admin@users.noreply.github.com>}
+Installed-Size: $(du -sk --exclude=DEBIAN "$DEB_ROOT" | cut -f1)
+Depends: $depends
+Section: video
+Priority: optional
+Homepage: https://github.com/bit-admin/AutoSlides-Extractor
+Description: Extract slide images from video presentations
+ AutoSlides Extractor detects slide changes in lecture and presentation
+ recordings, removes duplicate slides with perceptual hashing and filters
+ non-slide frames with an ONNX classifier. Includes a GUI and a headless CLI.
+ .
+ Self-contained build: Qt, OpenCV, FFmpeg and ONNX Runtime are bundled in
+ $DEB_PREFIX. Requires an x86_64 CPU with AVX2.
+EOF
+    chmod -R u+rwX,go+rX,go-w "$DEB_ROOT"
+    rm -f "$OUT_DIR/$BASENAME.deb"
+    # xz: readable by every dpkg in the supported range (zstd needs newer Debian dpkg).
+    dpkg-deb --root-owner-group -Zxz --build "$DEB_ROOT" "$OUT_DIR/$BASENAME.deb" > /dev/null
+    dpkg-deb --info "$OUT_DIR/$BASENAME.deb" | sed -n '/Package:/,/Depends:/p'
+else
+    echo "dpkg-deb not found; skipping .deb"
+fi
+
 echo
 echo "AppImage: $OUT_DIR/$BASENAME.AppImage ($(du -h "$OUT_DIR/$BASENAME.AppImage" | cut -f1))"
 echo "Portable: $OUT_DIR/$BASENAME-Portable.tar.gz ($(du -h "$OUT_DIR/$BASENAME-Portable.tar.gz" | cut -f1))"
+if [ -f "$OUT_DIR/$BASENAME.deb" ]; then
+    echo "Debian:   $OUT_DIR/$BASENAME.deb ($(du -h "$OUT_DIR/$BASENAME.deb" | cut -f1))"
+fi

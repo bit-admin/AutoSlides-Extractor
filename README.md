@@ -125,7 +125,7 @@ Available release assets may vary by version. In general:
 
 - **macOS**: use the `.dmg` package when provided.
 - **Windows**: use the installer or portable archive when provided. Prebuilt Windows packages use DirectML and CPU ONNX Runtime for hardware-accelerated ML inference without requiring CUDA drivers or external CUDA DLLs.
-- **Linux**: use the `.AppImage` (`chmod +x` it, then run it) or the portable `.tar.gz` (extract, then run `./AutoSlidesExtractor`). Prebuilt Linux packages target x86_64 CPUs with AVX2 and glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer), and use CPU ONNX Runtime. If the AppImage reports a FUSE error, install `libfuse2` or run it with `--appimage-extract-and-run`. Other systems can build from source.
+- **Linux**: on Debian/Ubuntu, install the `.deb` with `sudo apt install ./AutoSlides.Extractor-<version>-Linux-x86_64.deb` (installs to `/opt/autoslides-extractor` and adds a menu entry and the `AutoSlidesExtractor` command). On other distributions, use the `.AppImage` (`chmod +x` it, then run it) or the portable `.tar.gz` (extract, then run `./AutoSlidesExtractor`). Prebuilt Linux packages target x86_64 CPUs with AVX2 and glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer), and use CPU ONNX Runtime. If the AppImage reports a FUSE error, install `libfuse2` or run it with `--appimage-extract-and-run`. Other systems can build from source.
 
 ### macOS Gatekeeper Note
 
@@ -902,7 +902,7 @@ If ONNX Runtime is missing, the app still builds. ML classification and YOLO Aut
 
 ### Linux Packaging
 
-`installer/package-linux.sh` turns a Linux build into an AppImage and a portable tarball (the same script runs in CI):
+`installer/package-linux.sh` turns a Linux build into an AppImage, a portable tarball and (when `dpkg-deb` is available) a `.deb` (the same script runs in CI):
 
 ```bash
 QMAKE=/path/to/Qt/bin/qmake installer/package-linux.sh build
