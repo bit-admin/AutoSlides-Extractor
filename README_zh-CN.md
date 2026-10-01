@@ -125,7 +125,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 
 - **macOS**：优先使用 `.dmg` 安装包。
 - **Windows**：使用安装器或便携压缩包。预构建 Windows 发布包采用 DirectML 和 CPU ONNX Runtime 提供 GPU 硬件加速，无需额外安装或捆绑 CUDA 驱动与 DLL。
-- **Linux**：如果没有对应发行版包，请从源码构建。
+- **Linux**：Debian/Ubuntu 可使用 `sudo apt install ./AutoSlides.Extractor-<版本>-Linux-x86_64.deb` 安装 `.deb`（安装到 `/opt/autoslides-extractor`，并添加菜单项与 `AutoSlidesExtractor` 命令）。其他发行版使用 `.AppImage`（先 `chmod +x` 再运行）或便携 `.tar.gz`（解压后运行 `./AutoSlidesExtractor`）。预构建 Linux 发布包面向支持 AVX2 的 x86_64 CPU 与 glibc 2.35+（Ubuntu 22.04、Debian 12、Fedora 36 或更新版本），使用 CPU ONNX Runtime。如果 AppImage 提示 FUSE 错误，请安装 `libfuse2`，或使用 `--appimage-extract-and-run` 运行。其他系统可从源码构建。
 
 ### macOS Gatekeeper 提示
 

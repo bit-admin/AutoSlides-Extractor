@@ -16,7 +16,7 @@
 #   - Qt: install-qt-action (qtbase + qtsvg)
 #   - vcpkg tool (C:/vcpkg), vcpkg-bincache (prebuilt packages), ONNX vendor,
 #     NSIS: actions/cache/restore + actions/cache/save (survives later failures)
-#   - vcpkg x-gha: per-package upload during install (second layer)
+#   - (vcpkg's x-gha provider was removed from vcpkg-tool; files layer only)
 #   - NOT cached (by design): build/vcpkg_installed, buildtrees, app .obj —
 #     reinstall from bincache is fast; trees are path-sensitive / huge
 #
@@ -43,8 +43,6 @@ permissions:
   # contents:write required for softprops/action-gh-release when using github.token
   # (create tag/release + generate release notes). PAT still preferred via `token:`.
   contents: write
-  # x-gha binary cache needs to write Actions cache entries
-  actions: write
 
 env:
   ONNXRUNTIME_VERSION: "1.23.2"
@@ -52,11 +50,13 @@ env:
   ONNX_PACKAGE: "onnxruntime-win-x64"
   # Pin vcpkg so binary-cache ABIs stay stable across runs (do not git pull master).
   # Bump intentionally when you want newer OpenCV/FFmpeg ports.
-  VCPKG_COMMIT: "2025.04.09"
+  # 2026.07.29: FFmpeg 8.1.2, OpenCV 4.12.0. (2025.04.09 broke: its pinned MSYS2
+  # package file-5.45-3, needed to build FFmpeg, is gone from all mirrors.)
+  VCPKG_COMMIT: "2026.07.29"
   VCPKG_DEFAULT_TRIPLET: "x64-windows"
-  # x-gha: push/pull each package via Actions cache API as soon as it builds.
-  # files: extra local layer restored by actions/cache below.
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
+  # files: local layer restored/saved by actions/cache below. (The x-gha
+  # provider was removed in vcpkg-tool 2026 and would now fail the install.)
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
 
 jobs:
   build-windows:
@@ -114,20 +114,6 @@ jobs:
           archives: "qtbase qtsvg"
           cache: true
           cache-key-prefix: "qt-6.8.3-win64-msvc2022-base-svg"
-
-      # x-gha needs these in the *job* env. They exist for actions but are not
-      # automatically visible to shell steps unless exported (MS docs).
-      - name: Export GitHub Actions cache env for vcpkg x-gha
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-            if (!process.env.ACTIONS_CACHE_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
-              core.warning('ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN missing — x-gha binary cache will not work');
-            } else {
-              core.info('Exported ACTIONS_CACHE_URL and ACTIONS_RUNTIME_TOKEN for vcpkg x-gha');
-            }
 
       # ------------------------------------------------------------------
       # Cache strategy: restore early, SAVE IMMEDIATELY after each success.
@@ -270,12 +256,8 @@ jobs:
       - name: Install vcpkg dependencies
         id: vcpkg-install
         run: |
-          if (-not $env:ACTIONS_CACHE_URL -or -not $env:ACTIONS_RUNTIME_TOKEN) {
-            throw "ACTIONS_CACHE_URL / ACTIONS_RUNTIME_TOKEN not set — x-gha cannot work (export step missing?)"
-          }
           $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:GITHUB_WORKSPACE/vcpkg-bincache"
           Write-Host "VCPKG_BINARY_SOURCES=$env:VCPKG_BINARY_SOURCES"
-          Write-Host "ACTIONS_CACHE_URL is set: $($null -ne $env:ACTIONS_CACHE_URL)"
           Write-Host "This step compiles OpenCV/FFmpeg on cold cache (can take a long time)."
           Write-Host "Look for 'Restored N package(s)' — N should cover ffmpeg/opencv, not just 3 host tools."
           $log = Join-Path $env:RUNNER_TEMP "vcpkg-install.log"
@@ -727,6 +709,11 @@ jobs:
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Never replace an asset that is already on the release: a re-run against a
+          # published version (e.g. a Linux-only change merged after v<ver> shipped)
+          # must not swap the Windows binaries users already downloaded. To refresh a
+          # draft's Windows files, delete them from the draft first.
+          overwrite_files: false
           files: |
             build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Portable.zip
             build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe
