@@ -32,7 +32,7 @@ name: Build Linux Release
 
 on:
   push:
-    branches: [main, claude/kind-mccarthy-ueedif]  # TEMP: CI validation of this branch
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
