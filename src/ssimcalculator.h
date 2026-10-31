@@ -12,16 +12,6 @@
 #include <QObject>
 #include "memoryoptimizer.h"
 
-#ifdef __APPLE__
-    #include <Accelerate/Accelerate.h>
-    #define SIMD_AVAILABLE 1
-#elif defined(__x86_64__) || defined(_M_X64)
-    #include <immintrin.h>
-    #define SIMD_AVAILABLE 1
-#else
-    #define SIMD_AVAILABLE 0
-#endif
-
 // Forward declarations
 class SSIMMemoryPool;
 class OptimizedSSIMCalculator;
@@ -62,14 +52,15 @@ private:
 };
 
 /**
- * SIMD-optimized SSIM calculator for improved performance
+ * Batch SSIM helper. Statistics are computed with exact integer sums
+ * (see SSIMCalculator::globalSSIMFromGray).
  */
 class OptimizedSSIMCalculator {
 public:
     OptimizedSSIMCalculator();
     ~OptimizedSSIMCalculator();
 
-    // Calculate SSIM with SIMD optimizations
+    // Global SSIM of two 8-bit grayscale images, clamped to [0, 1]
     double calculateOptimizedSSIM(const cv::Mat& gray1, const cv::Mat& gray2);
 
     // Batch processing with shared downsampling
@@ -81,30 +72,9 @@ public:
     // Set memory pool for buffer reuse
     void setMemoryPool(std::shared_ptr<SSIMMemoryPool> pool);
 
-    // Public access to SIMD methods for SSIMCalculator
-    double calculateMeanSIMD(const cv::Mat& grayImage);
-    double calculateVarianceSIMD(const cv::Mat& grayImage, double mean);
-    double calculateCovarianceSIMD(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2);
-
-    // Public access to fallback methods
-    double calculateMeanFallback(const cv::Mat& grayImage);
-    double calculateVarianceFallback(const cv::Mat& grayImage, double mean);
-    double calculateCovarianceFallback(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2);
-
 private:
-
-    // Pre-allocated working buffers
-    cv::Mat m_workBuffer1;
-    cv::Mat m_workBuffer2;
-    cv::Mat m_grayBuffer1;
-    cv::Mat m_grayBuffer2;
-
     // Memory pool for buffer management
     std::shared_ptr<SSIMMemoryPool> m_memoryPool;
-
-    // SSIM constants
-    static constexpr double C1 = 6.5025;   // (0.01 * 255)^2
-    static constexpr double C2 = 58.5225;  // (0.03 * 255)^2
 };
 
 struct SSIMTask {
@@ -158,6 +128,21 @@ public:
      */
     double calculateGlobalSSIM(const cv::Mat& img1, const cv::Mat& img2,
                              bool enableDownsampling, int downsampleWidth, int downsampleHeight);
+
+    /**
+     * Prepare a frame for SSIM: optional INTER_AREA downsampling, then BGR->gray.
+     * Doing this once per frame lets adjacent pairs share the work.
+     * @return 8-bit single-channel image that owns its data
+     */
+    static cv::Mat prepareForSSIM(const cv::Mat& image, bool enableDownsampling,
+                                  int downsampleWidth, int downsampleHeight);
+
+    /**
+     * Global (single-window) SSIM of two prepared 8-bit grayscale images.
+     * Sums are accumulated in exact integer arithmetic, so the result does not
+     * depend on CPU architecture or SIMD support.
+     */
+    static double globalSSIMFromGray(const cv::Mat& gray1, const cv::Mat& gray2);
 
     /**
      * Calculate SSIM scores for multiple image pairs using multi-threading
@@ -216,31 +201,6 @@ private:
      * @return Downsampled image
      */
     cv::Mat downsampleImage(const cv::Mat& image, int targetWidth, int targetHeight);
-
-    /**
-     * Calculate mean of grayscale image
-     * @param grayImage Grayscale image
-     * @return Mean pixel value
-     */
-    double calculateMean(const cv::Mat& grayImage);
-
-    /**
-     * Calculate variance of grayscale image
-     * @param grayImage Grayscale image
-     * @param mean Mean pixel value
-     * @return Variance
-     */
-    double calculateVariance(const cv::Mat& grayImage, double mean);
-
-    /**
-     * Calculate covariance between two grayscale images
-     * @param gray1 First grayscale image
-     * @param gray2 Second grayscale image
-     * @param mean1 Mean of first image
-     * @param mean2 Mean of second image
-     * @return Covariance
-     */
-    double calculateCovariance(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2);
 
     /**
      * Get optimal number of threads for SSIM calculation

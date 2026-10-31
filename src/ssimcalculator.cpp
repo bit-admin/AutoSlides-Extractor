@@ -7,13 +7,7 @@
 #include <QTimer>
 #include <cstring>
 
-#if SIMD_AVAILABLE
-    #ifdef __APPLE__
-        #include <Accelerate/Accelerate.h>
-    #elif defined(__x86_64__) || defined(_M_X64)
-        #include <immintrin.h>
-    #endif
-#endif
+#include <cstdint>
 
 // ============================================================================
 // SSIMMemoryPool Implementation
@@ -97,13 +91,7 @@ cv::Mat SSIMMemoryPool::findOrCreateBuffer(std::vector<BufferInfo>& buffers, int
 // OptimizedSSIMCalculator Implementation
 // ============================================================================
 
-OptimizedSSIMCalculator::OptimizedSSIMCalculator() {
-    // Pre-allocate working buffers for common sizes
-    m_workBuffer1 = cv::Mat::zeros(270, 480, CV_64F);
-    m_workBuffer2 = cv::Mat::zeros(270, 480, CV_64F);
-    m_grayBuffer1 = cv::Mat::zeros(270, 480, CV_8UC1);
-    m_grayBuffer2 = cv::Mat::zeros(270, 480, CV_8UC1);
-}
+OptimizedSSIMCalculator::OptimizedSSIMCalculator() = default;
 
 OptimizedSSIMCalculator::~OptimizedSSIMCalculator() {
     // Buffers will be automatically released
@@ -126,57 +114,7 @@ double OptimizedSSIMCalculator::calculateOptimizedSSIM(const cv::Mat& gray1, con
         return 0.0;
     }
 
-    // Calculate means using SIMD if available, with error handling
-    double mean1, mean2, var1, var2, covariance;
-
-    try {
-#if SIMD_AVAILABLE
-        // Use SIMD optimizations for grayscale images
-        if (gray1.type() == CV_8UC1 && gray2.type() == CV_8UC1) {
-            mean1 = calculateMeanSIMD(gray1);
-            mean2 = calculateMeanSIMD(gray2);
-            var1 = calculateVarianceSIMD(gray1, mean1);
-            var2 = calculateVarianceSIMD(gray2, mean2);
-            covariance = calculateCovarianceSIMD(gray1, gray2, mean1, mean2);
-        } else {
-            // Fall back to non-SIMD for non-grayscale images
-            mean1 = calculateMeanFallback(gray1);
-            mean2 = calculateMeanFallback(gray2);
-            var1 = calculateVarianceFallback(gray1, mean1);
-            var2 = calculateVarianceFallback(gray2, mean2);
-            covariance = calculateCovarianceFallback(gray1, gray2, mean1, mean2);
-        }
-#else
-        mean1 = calculateMeanFallback(gray1);
-        mean2 = calculateMeanFallback(gray2);
-        var1 = calculateVarianceFallback(gray1, mean1);
-        var2 = calculateVarianceFallback(gray2, mean2);
-        covariance = calculateCovarianceFallback(gray1, gray2, mean1, mean2);
-#endif
-    } catch (const std::exception& e) {
-        std::cerr << "Error in SIMD calculations, falling back to standard implementation: " << e.what() << std::endl;
-        mean1 = calculateMeanFallback(gray1);
-        mean2 = calculateMeanFallback(gray2);
-        var1 = calculateVarianceFallback(gray1, mean1);
-        var2 = calculateVarianceFallback(gray2, mean2);
-        covariance = calculateCovarianceFallback(gray1, gray2, mean1, mean2);
-    }
-
-    // Validate calculated values
-    if (std::isnan(mean1) || std::isnan(mean2) || std::isnan(var1) || std::isnan(var2) || std::isnan(covariance)) {
-        std::cerr << "Warning: NaN values detected in SSIM calculation" << std::endl;
-        return 0.0;
-    }
-
-    // Calculate SSIM using the global formula
-    double numerator = (2 * mean1 * mean2 + C1) * (2 * covariance + C2);
-    double denominator = (mean1 * mean1 + mean2 * mean2 + C1) * (var1 + var2 + C2);
-
-    if (denominator == 0.0) {
-        return 1.0; // Perfect similarity when both images are uniform
-    }
-
-    double result = numerator / denominator;
+    double result = SSIMCalculator::globalSSIMFromGray(gray1, gray2);
 
     // Clamp result to valid SSIM range [0, 1]
     if (result < 0.0) result = 0.0;
@@ -247,280 +185,6 @@ std::vector<double> OptimizedSSIMCalculator::calculateBatchSSIM(const std::vecto
     return results;
 }
 
-#if SIMD_AVAILABLE
-
-#ifdef __APPLE__
-// Apple Silicon NEON optimizations using Accelerate framework
-double OptimizedSSIMCalculator::calculateMeanSIMD(const cv::Mat& grayImage) {
-    if (grayImage.type() != CV_8UC1) {
-        return calculateMeanFallback(grayImage);
-    }
-
-    const uint8_t* data = grayImage.ptr<uint8_t>();
-    const int totalPixels = grayImage.rows * grayImage.cols;
-
-    // Use vDSP for efficient sum calculation
-    float sum = 0.0f;
-    vDSP_Length length = static_cast<vDSP_Length>(totalPixels);
-
-    // Convert uint8 to float and sum
-    std::vector<float> floatData(totalPixels);
-    vDSP_vfltu8(data, 1, floatData.data(), 1, length);
-    vDSP_sve(floatData.data(), 1, &sum, length);
-
-    return static_cast<double>(sum) / totalPixels;
-}
-
-double OptimizedSSIMCalculator::calculateVarianceSIMD(const cv::Mat& grayImage, double mean) {
-    if (grayImage.type() != CV_8UC1) {
-        return calculateVarianceFallback(grayImage, mean);
-    }
-
-    const uint8_t* data = grayImage.ptr<uint8_t>();
-    const int totalPixels = grayImage.rows * grayImage.cols;
-
-    // Convert to float and subtract mean
-    std::vector<float> floatData(totalPixels);
-    std::vector<float> diff(totalPixels);
-
-    vDSP_Length length = static_cast<vDSP_Length>(totalPixels);
-    vDSP_vfltu8(data, 1, floatData.data(), 1, length);
-
-    float meanFloat = static_cast<float>(-mean);  // Negative for subtraction
-    vDSP_vsadd(floatData.data(), 1, &meanFloat, diff.data(), 1, length);
-
-    // Square the differences
-    vDSP_vsq(diff.data(), 1, diff.data(), 1, length);
-
-    // Sum the squared differences
-    float variance = 0.0f;
-    vDSP_sve(diff.data(), 1, &variance, length);
-
-    return static_cast<double>(variance) / totalPixels;
-}
-
-double OptimizedSSIMCalculator::calculateCovarianceSIMD(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2) {
-    if (gray1.type() != CV_8UC1 || gray2.type() != CV_8UC1) {
-        return calculateCovarianceFallback(gray1, gray2, mean1, mean2);
-    }
-
-    const uint8_t* data1 = gray1.ptr<uint8_t>();
-    const uint8_t* data2 = gray2.ptr<uint8_t>();
-    const int totalPixels = gray1.rows * gray1.cols;
-
-    // Convert to float
-    std::vector<float> floatData1(totalPixels);
-    std::vector<float> floatData2(totalPixels);
-    std::vector<float> diff1(totalPixels);
-    std::vector<float> diff2(totalPixels);
-
-    vDSP_Length length = static_cast<vDSP_Length>(totalPixels);
-    vDSP_vfltu8(data1, 1, floatData1.data(), 1, length);
-    vDSP_vfltu8(data2, 1, floatData2.data(), 1, length);
-
-    // Subtract means
-    float meanFloat1 = static_cast<float>(-mean1);  // Negative for subtraction
-    float meanFloat2 = static_cast<float>(-mean2);  // Negative for subtraction
-    vDSP_vsadd(floatData1.data(), 1, &meanFloat1, diff1.data(), 1, length);
-    vDSP_vsadd(floatData2.data(), 1, &meanFloat2, diff2.data(), 1, length);
-
-    // Multiply differences
-    vDSP_vmul(diff1.data(), 1, diff2.data(), 1, diff1.data(), 1, length);
-
-    // Sum the products
-    float covariance = 0.0f;
-    vDSP_sve(diff1.data(), 1, &covariance, length);
-
-    return static_cast<double>(covariance) / totalPixels;
-}
-
-#elif defined(__x86_64__) || defined(_M_X64)
-// x86_64 AVX2 optimizations
-double OptimizedSSIMCalculator::calculateMeanSIMD(const cv::Mat& grayImage) {
-    if (grayImage.type() != CV_8UC1) {
-        return calculateMeanFallback(grayImage);
-    }
-
-    const uint8_t* data = grayImage.ptr<uint8_t>();
-    const int totalPixels = grayImage.rows * grayImage.cols;
-    const int simdPixels = (totalPixels / 32) * 32; // Process 32 pixels at a time with AVX2
-
-    __m256i sum = _mm256_setzero_si256();
-
-    // Process 32 pixels at a time
-    for (int i = 0; i < simdPixels; i += 32) {
-        __m256i pixels = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(data + i));
-
-        // Convert uint8 to uint16 to avoid overflow
-        __m256i pixels_lo = _mm256_unpacklo_epi8(pixels, _mm256_setzero_si256());
-        __m256i pixels_hi = _mm256_unpackhi_epi8(pixels, _mm256_setzero_si256());
-
-        // Add to sum
-        sum = _mm256_add_epi16(sum, pixels_lo);
-        sum = _mm256_add_epi16(sum, pixels_hi);
-    }
-
-    // Extract sum from SIMD register
-    uint16_t sumArray[16];
-    _mm256_storeu_si256(reinterpret_cast<__m256i*>(sumArray), sum);
-
-    uint64_t totalSum = 0;
-    for (int i = 0; i < 16; ++i) {
-        totalSum += sumArray[i];
-    }
-
-    // Process remaining pixels
-    for (int i = simdPixels; i < totalPixels; ++i) {
-        totalSum += data[i];
-    }
-
-    return static_cast<double>(totalSum) / totalPixels;
-}
-
-double OptimizedSSIMCalculator::calculateVarianceSIMD(const cv::Mat& grayImage, double mean) {
-    if (grayImage.type() != CV_8UC1) {
-        return calculateVarianceFallback(grayImage, mean);
-    }
-
-    const uint8_t* data = grayImage.ptr<uint8_t>();
-    const int totalPixels = grayImage.rows * grayImage.cols;
-    const int simdPixels = (totalPixels / 32) * 32;
-
-    __m256 meanVec = _mm256_set1_ps(static_cast<float>(mean));
-    __m256 sumVec = _mm256_setzero_ps();
-
-    // Process 8 pixels at a time (converting to float)
-    for (int i = 0; i < simdPixels; i += 8) {
-        // Load 8 uint8 pixels and convert to float
-        __m128i pixels8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(data + i));
-        __m128i pixels16 = _mm_unpacklo_epi8(pixels8, _mm_setzero_si128());
-        __m128i pixels32_lo = _mm_unpacklo_epi16(pixels16, _mm_setzero_si128());
-        __m128i pixels32_hi = _mm_unpackhi_epi16(pixels16, _mm_setzero_si128());
-
-        __m256 pixelsFloat = _mm256_cvtepi32_ps(_mm256_set_m128i(pixels32_hi, pixels32_lo));
-
-        // Subtract mean and square
-        __m256 diff = _mm256_sub_ps(pixelsFloat, meanVec);
-        __m256 squared = _mm256_mul_ps(diff, diff);
-
-        // Add to sum
-        sumVec = _mm256_add_ps(sumVec, squared);
-    }
-
-    // Extract sum from SIMD register
-    float sumArray[8];
-    _mm256_storeu_ps(sumArray, sumVec);
-
-    double totalSum = 0.0;
-    for (int i = 0; i < 8; ++i) {
-        totalSum += sumArray[i];
-    }
-
-    // Process remaining pixels
-    for (int i = simdPixels; i < totalPixels; ++i) {
-        double diff = data[i] - mean;
-        totalSum += diff * diff;
-    }
-
-    return totalSum / totalPixels;
-}
-
-double OptimizedSSIMCalculator::calculateCovarianceSIMD(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2) {
-    if (gray1.type() != CV_8UC1 || gray2.type() != CV_8UC1) {
-        return calculateCovarianceFallback(gray1, gray2, mean1, mean2);
-    }
-
-    const uint8_t* data1 = gray1.ptr<uint8_t>();
-    const uint8_t* data2 = gray2.ptr<uint8_t>();
-    const int totalPixels = gray1.rows * gray1.cols;
-    const int simdPixels = (totalPixels / 8) * 8;
-
-    __m256 mean1Vec = _mm256_set1_ps(static_cast<float>(mean1));
-    __m256 mean2Vec = _mm256_set1_ps(static_cast<float>(mean2));
-    __m256 sumVec = _mm256_setzero_ps();
-
-    // Process 8 pixels at a time
-    for (int i = 0; i < simdPixels; i += 8) {
-        // Load and convert pixels to float
-        __m128i pixels1_8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(data1 + i));
-        __m128i pixels2_8 = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(data2 + i));
-
-        __m128i pixels1_16 = _mm_unpacklo_epi8(pixels1_8, _mm_setzero_si128());
-        __m128i pixels2_16 = _mm_unpacklo_epi8(pixels2_8, _mm_setzero_si128());
-
-        __m128i pixels1_32_lo = _mm_unpacklo_epi16(pixels1_16, _mm_setzero_si128());
-        __m128i pixels1_32_hi = _mm_unpackhi_epi16(pixels1_16, _mm_setzero_si128());
-        __m128i pixels2_32_lo = _mm_unpacklo_epi16(pixels2_16, _mm_setzero_si128());
-        __m128i pixels2_32_hi = _mm_unpackhi_epi16(pixels2_16, _mm_setzero_si128());
-
-        __m256 pixels1Float = _mm256_cvtepi32_ps(_mm256_set_m128i(pixels1_32_hi, pixels1_32_lo));
-        __m256 pixels2Float = _mm256_cvtepi32_ps(_mm256_set_m128i(pixels2_32_hi, pixels2_32_lo));
-
-        // Subtract means and multiply
-        __m256 diff1 = _mm256_sub_ps(pixels1Float, mean1Vec);
-        __m256 diff2 = _mm256_sub_ps(pixels2Float, mean2Vec);
-        __m256 product = _mm256_mul_ps(diff1, diff2);
-
-        // Add to sum
-        sumVec = _mm256_add_ps(sumVec, product);
-    }
-
-    // Extract sum from SIMD register
-    float sumArray[8];
-    _mm256_storeu_ps(sumArray, sumVec);
-
-    double totalSum = 0.0;
-    for (int i = 0; i < 8; ++i) {
-        totalSum += sumArray[i];
-    }
-
-    // Process remaining pixels
-    for (int i = simdPixels; i < totalPixels; ++i) {
-        double diff1 = data1[i] - mean1;
-        double diff2 = data2[i] - mean2;
-        totalSum += diff1 * diff2;
-    }
-
-    return totalSum / totalPixels;
-}
-
-#endif // __x86_64__
-
-#endif // SIMD_AVAILABLE
-
-// Fallback implementations for non-SIMD systems
-double OptimizedSSIMCalculator::calculateMeanFallback(const cv::Mat& grayImage) {
-    cv::Scalar meanScalar = cv::mean(grayImage);
-    return meanScalar[0];
-}
-
-double OptimizedSSIMCalculator::calculateVarianceFallback(const cv::Mat& grayImage, double mean) {
-    cv::Mat diff;
-    grayImage.convertTo(diff, CV_64F);
-    diff -= mean;
-
-    cv::Mat variance;
-    cv::multiply(diff, diff, variance);
-
-    cv::Scalar varianceScalar = cv::mean(variance);
-    return varianceScalar[0];
-}
-
-double OptimizedSSIMCalculator::calculateCovarianceFallback(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2) {
-    cv::Mat diff1, diff2;
-    gray1.convertTo(diff1, CV_64F);
-    gray2.convertTo(diff2, CV_64F);
-
-    diff1 -= mean1;
-    diff2 -= mean2;
-
-    cv::Mat covariance;
-    cv::multiply(diff1, diff2, covariance);
-
-    cv::Scalar covarianceScalar = cv::mean(covariance);
-    return covarianceScalar[0];
-}
-
 // ============================================================================
 // SSIMCalculator Implementation (Updated)
 // ============================================================================
@@ -560,43 +224,86 @@ double SSIMCalculator::calculateGlobalSSIM(const cv::Mat& img1, const cv::Mat& i
 double SSIMCalculator::calculateGlobalSSIM(const cv::Mat& img1, const cv::Mat& img2,
                                          bool enableDownsampling, int downsampleWidth, int downsampleHeight)
 {
-    cv::Mat processedImg1 = img1;
-    cv::Mat processedImg2 = img2;
+    return globalSSIMFromGray(prepareForSSIM(img1, enableDownsampling, downsampleWidth, downsampleHeight),
+                              prepareForSSIM(img2, enableDownsampling, downsampleWidth, downsampleHeight));
+}
 
-    // Apply downsampling if enabled
-    if (enableDownsampling) {
-        processedImg1 = downsampleImage(img1, downsampleWidth, downsampleHeight);
-        processedImg2 = downsampleImage(img2, downsampleWidth, downsampleHeight);
+cv::Mat SSIMCalculator::prepareForSSIM(const cv::Mat& image, bool enableDownsampling,
+                                       int downsampleWidth, int downsampleHeight)
+{
+    if (image.empty()) {
+        return cv::Mat();
     }
 
-    // Convert to grayscale
-    cv::Mat gray1 = convertToGrayscale(processedImg1);
-    cv::Mat gray2 = convertToGrayscale(processedImg2);
-
-    // Ensure images have the same dimensions
-    if (gray1.size() != gray2.size()) {
-        cv::resize(gray2, gray2, gray1.size());
+    // Same order as before: downsample the colour image, then convert to gray.
+    cv::Mat processed = image;
+    if (enableDownsampling && downsampleWidth > 0 && downsampleHeight > 0 &&
+        (image.cols > downsampleWidth || image.rows > downsampleHeight)) {
+        cv::resize(image, processed, cv::Size(downsampleWidth, downsampleHeight), 0, 0, cv::INTER_AREA);
     }
 
-    // Calculate means
-    double mean1 = calculateMean(gray1);
-    double mean2 = calculateMean(gray2);
+    cv::Mat gray;
+    if (processed.channels() == 3) {
+        cv::cvtColor(processed, gray, cv::COLOR_BGR2GRAY);
+    } else if (processed.channels() == 4) {
+        cv::cvtColor(processed, gray, cv::COLOR_BGRA2GRAY);
+    } else if (processed.channels() == 1) {
+        gray = processed.clone(); // own the data: callers may keep it across chunks
+    } else {
+        return cv::Mat();
+    }
 
-    // Calculate variances
-    double var1 = calculateVariance(gray1, mean1);
-    double var2 = calculateVariance(gray2, mean2);
+    if (gray.depth() != CV_8U) {
+        gray.convertTo(gray, CV_8U);
+    }
+    return gray;
+}
 
-    // Calculate covariance
-    double covariance = calculateCovariance(gray1, gray2, mean1, mean2);
+double SSIMCalculator::globalSSIMFromGray(const cv::Mat& gray1, const cv::Mat& gray2)
+{
+    if (gray1.empty() || gray2.empty() || gray1.type() != CV_8UC1 || gray2.type() != CV_8UC1) {
+        return 0.0;
+    }
 
-    // Calculate SSIM using the global formula
-    double numerator = (2 * mean1 * mean2 + C1) * (2 * covariance + C2);
-    double denominator = (mean1 * mean1 + mean2 * mean2 + C1) * (var1 + var2 + C2);
+    cv::Mat other = gray2;
+    if (other.size() != gray1.size()) {
+        cv::resize(gray2, other, gray1.size(), 0, 0, cv::INTER_AREA);
+    }
 
+    // Exact integer sums. Per-block uint32 accumulators cannot overflow
+    // (4096 * 255 * 255 < 2^32); totals go into uint64.
+    constexpr int kBlock = 4096;
+    uint64_t s1 = 0, s2 = 0, s11 = 0, s22 = 0, s12 = 0;
+    for (int y = 0; y < gray1.rows; ++y) {
+        const uint8_t* a = gray1.ptr<uint8_t>(y);
+        const uint8_t* b = other.ptr<uint8_t>(y);
+        for (int x0 = 0; x0 < gray1.cols; x0 += kBlock) {
+            const int x1 = std::min(gray1.cols, x0 + kBlock);
+            uint32_t b1 = 0, b2 = 0, b11 = 0, b22 = 0, b12 = 0;
+            for (int x = x0; x < x1; ++x) {
+                const uint32_t p = a[x], q = b[x];
+                b1 += p;
+                b2 += q;
+                b11 += p * p;
+                b22 += q * q;
+                b12 += p * q;
+            }
+            s1 += b1; s2 += b2; s11 += b11; s22 += b22; s12 += b12;
+        }
+    }
+
+    const double n = static_cast<double>(gray1.total());
+    const double mean1 = s1 / n;
+    const double mean2 = s2 / n;
+    const double var1 = s11 / n - mean1 * mean1;
+    const double var2 = s22 / n - mean2 * mean2;
+    const double covariance = s12 / n - mean1 * mean2;
+
+    const double numerator = (2 * mean1 * mean2 + C1) * (2 * covariance + C2);
+    const double denominator = (mean1 * mean1 + mean2 * mean2 + C1) * (var1 + var2 + C2);
     if (denominator == 0.0) {
-        return 1.0; // Perfect similarity when both images are uniform
+        return 1.0;
     }
-
     return numerator / denominator;
 }
 
@@ -633,71 +340,6 @@ cv::Mat SSIMCalculator::downsampleImage(const cv::Mat& image, int targetWidth, i
     cv::resize(image, downsampledImage, cv::Size(targetWidth, targetHeight), 0, 0, cv::INTER_AREA);
 
     return downsampledImage;
-}
-
-double SSIMCalculator::calculateMean(const cv::Mat& grayImage)
-{
-    // Use optimized calculator if available and image is grayscale
-    if (m_optimizedCalculator && grayImage.type() == CV_8UC1) {
-#if SIMD_AVAILABLE
-        return m_optimizedCalculator->calculateMeanSIMD(grayImage);
-#else
-        return m_optimizedCalculator->calculateMeanFallback(grayImage);
-#endif
-    }
-
-    // Fallback to original implementation for other cases
-    cv::Scalar meanScalar = cv::mean(grayImage);
-    return meanScalar[0];
-}
-
-double SSIMCalculator::calculateVariance(const cv::Mat& grayImage, double mean)
-{
-    // Use optimized calculator if available and image is grayscale
-    if (m_optimizedCalculator && grayImage.type() == CV_8UC1) {
-#if SIMD_AVAILABLE
-        return m_optimizedCalculator->calculateVarianceSIMD(grayImage, mean);
-#else
-        return m_optimizedCalculator->calculateVarianceFallback(grayImage, mean);
-#endif
-    }
-
-    // Fallback to original implementation for other cases
-    cv::Mat diff;
-    grayImage.convertTo(diff, CV_64F);
-    diff -= mean;
-
-    cv::Mat variance;
-    cv::multiply(diff, diff, variance);
-
-    cv::Scalar varianceScalar = cv::mean(variance);
-    return varianceScalar[0];
-}
-
-double SSIMCalculator::calculateCovariance(const cv::Mat& gray1, const cv::Mat& gray2, double mean1, double mean2)
-{
-    // Use optimized calculator if available and images are grayscale
-    if (m_optimizedCalculator && gray1.type() == CV_8UC1 && gray2.type() == CV_8UC1) {
-#if SIMD_AVAILABLE
-        return m_optimizedCalculator->calculateCovarianceSIMD(gray1, gray2, mean1, mean2);
-#else
-        return m_optimizedCalculator->calculateCovarianceFallback(gray1, gray2, mean1, mean2);
-#endif
-    }
-
-    // Fallback to original implementation for other cases
-    cv::Mat diff1, diff2;
-    gray1.convertTo(diff1, CV_64F);
-    gray2.convertTo(diff2, CV_64F);
-
-    diff1 -= mean1;
-    diff2 -= mean2;
-
-    cv::Mat covariance;
-    cv::multiply(diff1, diff2, covariance);
-
-    cv::Scalar covarianceScalar = cv::mean(covariance);
-    return covarianceScalar[0];
 }
 
 std::vector<SSIMResult> SSIMCalculator::calculateMultiThreadedSSIM(const std::vector<SSIMTask>& tasks)

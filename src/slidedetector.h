@@ -25,8 +25,8 @@ struct SlideDetectionResult {
     // Parallel to selectedSlideIndices for this chunk (confirmed saves only).
     std::vector<ConfirmedSlideTiming> confirmedSlideTimings;
     std::vector<double> ssimScores;
-    int totalFramesProcessed;
-    double processingTimeSeconds;
+    int totalFramesProcessed = 0;
+    double processingTimeSeconds = 0.0;
 };
 
 class SlideDetector : public QObject
@@ -76,8 +76,9 @@ public:
                                                         int downsampleHeight);
 
     /**
-     * Detect slides from a chunk of frames using the two-stage algorithm with state continuation
-     * This method supports chunk-based processing for memory optimization
+     * Detect slides from a chunk of frames using the two-stage algorithm with state continuation.
+     * Feeding a video chunk by chunk gives exactly the same slides as one pass over all frames,
+     * whatever the chunk size: candidate verification carries across chunk boundaries.
      * @param newFrames Vector of new frames for this chunk
      * @param newTimestamps Media PTS seconds parallel to newFrames (same length preferred)
      * @param state Processing state that maintains continuity across chunks
@@ -87,7 +88,8 @@ public:
      * @param enableDownsampling Whether to enable downsampling
      * @param downsampleWidth Target width for downsampling
      * @param downsampleHeight Target height for downsampling
-     * @return SlideDetectionResult containing selected slide indices for this chunk
+     * @return Global indices of slides saved in this chunk (all inside this chunk's frame range),
+     *         with confirmedSlideTimings parallel to them
      */
     SlideDetectionResult detectSlidesFromChunk(const std::vector<cv::Mat>& newFrames,
                                              const std::vector<double>& newTimestamps,
@@ -98,27 +100,6 @@ public:
                                              bool enableDownsampling,
                                              int downsampleWidth,
                                              int downsampleHeight);
-
-    /**
-     * Optimized detect slides from FrameBuffer chunk using zero-copy operations
-     * @param frameBuffers Vector of FrameBuffers for this chunk
-     * @param state Processing state that maintains continuity across chunks
-     * @param isLastChunk Whether this is the final chunk in the sequence
-     * @param ssimThreshold SSIM threshold for similarity detection
-     * @param verificationCount Number of consecutive frames needed for stability verification
-     * @param enableDownsampling Whether to enable downsampling
-     * @param downsampleWidth Target width for downsampling
-     * @param downsampleHeight Target height for downsampling
-     * @return SlideDetectionResult containing selected slide indices for this chunk
-     */
-    SlideDetectionResult detectSlidesFromFrameBufferChunk(const std::vector<FrameBuffer>& frameBuffers,
-                                                         ProcessingState& state,
-                                                         bool isLastChunk,
-                                                         double ssimThreshold,
-                                                         int verificationCount,
-                                                         bool enableDownsampling,
-                                                         int downsampleWidth,
-                                                         int downsampleHeight);
 
     /**
      * Calculate SSIM scores for all adjacent frame pairs
@@ -147,19 +128,6 @@ public:
                                                      int downsampleWidth,
                                                      int downsampleHeight);
 
-    /**
-     * Optimized calculate SSIM scores from FrameBuffers using zero-copy operations
-     * @param frameBuffers Vector of FrameBuffers
-     * @param enableDownsampling Whether to enable downsampling
-     * @param downsampleWidth Target width for downsampling
-     * @param downsampleHeight Target height for downsampling
-     * @return Vector of SSIM scores between adjacent frames
-     */
-    std::vector<double> calculateSSIMScoresFromFrameBuffers(const std::vector<FrameBuffer>& frameBuffers,
-                                                           bool enableDownsampling,
-                                                           int downsampleWidth,
-                                                           int downsampleHeight);
-
 signals:
     void ssimCalculationProgress(int current, int total);
     void slideDetectionProgress(int current, int total);
@@ -167,82 +135,22 @@ signals:
 
 private:
     /**
-     * Extract slides using the two-stage algorithm
-     * @param framePaths Vector of frame file paths
-     * @param scores Vector of SSIM scores between adjacent frames
-     * @param ssimThreshold SSIM threshold for similarity detection
-     * @param verificationCount Number of consecutive frames needed for stability
-     * @return Vector of selected slide indices
-     */
-    std::vector<int> extractSlides(const std::vector<std::string>& framePaths,
-                                 const std::vector<double>& scores,
-                                 double ssimThreshold,
-                                 int verificationCount);
-
-    /**
-     * Extract slides using the two-stage algorithm from frame count
-     * @param frameCount Total number of frames
-     * @param scores Vector of SSIM scores between adjacent frames
-     * @param ssimThreshold SSIM threshold for similarity detection
-     * @param verificationCount Number of consecutive frames needed for stability
-     * @return Vector of selected slide indices
+     * Single-pass detection over a full score sequence (frame i vs i+1).
+     * Uses the same state machine as detectSlidesFromChunk.
      */
     std::vector<int> extractSlidesFromCount(int frameCount,
                                           const std::vector<double>& scores,
                                           double ssimThreshold,
                                           int verificationCount);
 
-    /**
-     * Handle end-of-sequence logic for slide detection
-     * @param framePaths Vector of frame file paths
-     * @param scores Vector of SSIM scores
-     * @param lastStableIndex Index of the last stable frame
-     * @param savedSlideIndices Vector of already selected slide indices
-     * @param ssimThreshold SSIM threshold
-     */
-    void handleEndOfSequence(const std::vector<std::string>& framePaths,
-                           const std::vector<double>& scores,
-                           int lastStableIndex,
-                           std::vector<int>& savedSlideIndices,
-                           double ssimThreshold);
+    /** Downsample + grayscale every frame once (in parallel). */
+    static std::vector<cv::Mat> prepareFrames(const std::vector<cv::Mat>& frames,
+                                              bool enableDownsampling,
+                                              int downsampleWidth,
+                                              int downsampleHeight);
 
-    /**
-     * Handle end-of-sequence logic for slide detection (frame count version)
-     * @param frameCount Total number of frames
-     * @param scores Vector of SSIM scores
-     * @param lastStableIndex Index of the last stable frame
-     * @param savedSlideIndices Vector of already selected slide indices
-     * @param ssimThreshold SSIM threshold
-     */
-    void handleEndOfSequenceFromCount(int frameCount,
-                                    const std::vector<double>& scores,
-                                    int lastStableIndex,
-                                    std::vector<int>& savedSlideIndices,
-                                    double ssimThreshold);
-
-    /**
-     * Update verification state based on current processing position and verification progress
-     * @param state Processing state to update
-     * @param currentLocalIndex Current local index in the working frames
-     * @param verificationProgress How many verification steps have been completed
-     * @param verificationCount Total verification count needed
-     */
-    void updateVerificationState(ProcessingState& state,
-                               int currentLocalIndex,
-                               int verificationProgress,
-                               int verificationCount);
-
-    /**
-     * Update verification state at the end of chunk processing
-     * @param state Processing state to update
-     * @param finalProcessingIndex Final processing index in the chunk
-     * @param totalScores Total number of SSIM scores in the chunk
-     * @param verificationCount Total verification count needed
-     */
-    void updateVerificationStateAtChunkEnd(ProcessingState& state,
-                                         int finalProcessingIndex,
-                                         int totalScores,
-                                         int verificationCount);
+    /** SSIM of each adjacent pair of prepared frames (in parallel). */
+    static std::vector<double> scoreAdjacent(const std::vector<const cv::Mat*>& prepared);
 
     SSIMCalculator m_ssimCalculator;
 };
