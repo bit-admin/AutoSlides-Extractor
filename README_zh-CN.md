@@ -139,7 +139,7 @@ sudo xattr -d com.apple.quarantine /Applications/AutoSlides\ Extractor.app
 
 | 项目 | 建议 |
 | --- | --- |
-| 操作系统 | macOS 11+、Windows 10+ x64，或现代 Linux 发行版 |
+| 操作系统 | macOS 13.4+（Apple Silicon）、Windows 10+ x64，或现代 Linux 发行版 |
 | CPU | 四核或更高 |
 | 内存 | 最低 8 GB，长视频建议 16 GB 或更多 |
 | 磁盘 | 需要为 JPEG、应用垃圾箱、裁剪备份和 PDF 留出空间 |
