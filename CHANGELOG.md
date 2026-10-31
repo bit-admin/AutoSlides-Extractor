@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.0] - 2026-10-31
 
 ### 🚀 Added
+- **macOS release build**: New `Build macOS Release` workflow producing an Apple Silicon (arm64) `.dmg` (LZMA-compressed, app + `/Applications` link, ad-hoc signed). Dependencies come from the same pinned vcpkg and `vcpkg.json` as Windows/Linux (overlay triplet `arm64-osx-dynamic-release`, deployment target macOS 12), with the Core ML ONNX Runtime and Qt 6.8. Packaging lives in `installer/package-macos.sh`. It fails on unresolved, external or Homebrew libraries, on vcpkg binaries built for a newer macOS than the target, and on an FFmpeg built without VideoToolbox. It sets `LSMinimumSystemVersion` from the bundled binaries. The DMG is smoke-tested in CI (CLI extraction with ML + timeline, GUI launch). `install.command` is no longer shipped.
 - **Linux release build**: New `Build Linux Release` workflow producing an x86_64 AppImage, a portable `.tar.gz` and a self-contained `.deb` (installs to `/opt/autoslides-extractor`, with a `/usr/bin` command and menu entry) (vcpkg OpenCV/FFmpeg from the same `vcpkg.json` as Windows, Qt 6.8, CPU ONNX Runtime; built on Ubuntu 22.04 for glibc 2.35+). Packaging lives in `installer/package-linux.sh` and can be run locally.
 - **Linux desktop integration**: `.desktop` entry and 256 px icon, installed by `cmake --install`; the GUI sets its window icon and desktop file name on Linux.
 
