@@ -123,7 +123,7 @@ Download release packages from the [GitHub Releases page](https://github.com/bit
 
 Available release assets may vary by version. In general:
 
-- **macOS**: use the `.dmg` package when provided.
+- **macOS**: Apple Silicon (arm64) only. Open `AutoSlides.Extractor-<version>-macOS-arm64.dmg` and drag **AutoSlides Extractor** onto the **Applications** link. The app is ad-hoc signed (not notarized), so clear the quarantine flag once after installing (see the Gatekeeper note below). Intel Macs can build from source.
 - **Windows**: use the installer or portable archive when provided. Prebuilt Windows packages use DirectML and CPU ONNX Runtime for hardware-accelerated ML inference without requiring CUDA drivers or external CUDA DLLs.
 - **Linux**: on Debian/Ubuntu, install the `.deb` with `sudo apt install ./AutoSlides.Extractor-<version>-Linux-x86_64.deb` (installs to `/opt/autoslides-extractor` and adds a menu entry and the `AutoSlidesExtractor` command). On other distributions, use the `.AppImage` (`chmod +x` it, then run it) or the portable `.tar.gz` (extract, then run `./AutoSlidesExtractor`). Prebuilt Linux packages target x86_64 CPUs with AVX2 and glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer), and use CPU ONNX Runtime. If the AppImage reports a FUSE error, install `libfuse2` or run it with `--appimage-extract-and-run`. Other systems can build from source.
 
