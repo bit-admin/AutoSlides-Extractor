@@ -7,121 +7,36 @@
 #include "memoryoptimizer.h"
 
 /**
- * Verification state for the chunk-based slide detection algorithm
- * Tracks the verification progress of frames across chunk boundaries
- */
-enum class VerificationState {
-    NONE = 0,           // Non-verification state - no ongoing verification
-    VERIFICATION_1OF3,  // Verification state 1 of 3 - first verification frame
-    VERIFICATION_2OF3,  // Verification state 2 of 3 - second verification frame
-    VERIFICATION_3OF3   // Verification state 3 of 3 - third verification frame (stable)
-};
-
-/**
- * Processing state structure for chunk-based slide detection
- * Maintains state information across multiple chunks to enable continuous processing
- * while minimizing memory usage through single-frame overlap and zero-copy operations
+ * Processing state for chunk-based slide detection.
+ *
+ * Detection is a streaming state machine over the SSIM score sequence, so the
+ * only things that must survive a chunk boundary are: the previous frame (to
+ * score the boundary pair), whether a candidate slide is being verified, and
+ * how many more stable scores it still needs. With that, chunked processing
+ * gives exactly the same result as a single pass over the whole video.
  */
 struct ProcessingState {
-    // Global slide detection results
-    std::vector<int> savedSlideIndices;     // Global indices of saved slides
-    int lastStableIndex;                    // Global index of the last stable frame
+    // Global indices of all saved slides, in increasing order
+    std::vector<int> savedSlideIndices;
+    int lastStableIndex = -1;               // Global index of the last saved slide
 
-    // Zero-copy single-frame overlap mechanism
-    FrameBuffer lastFrameBuffer;            // Last frame from the previous chunk (zero-copy)
-    int lastFrameGlobalIndex;               // Global index of the last frame
-    double lastFrameTimestamp;              // Media PTS seconds of lastFrameBuffer
+    // Last frame of the previous chunk, already downsampled + grayscale
+    // (only used to score the pair that straddles the chunk boundary).
+    cv::Mat lastFramePrepared;
+    int lastFrameGlobalIndex = -1;          // -1 until the first chunk has been processed
+    double lastFrameTimestamp = 0.0;        // Media PTS seconds of that frame
 
-    // Cross-chunk candidate transition PTS (set when a transition opens; used when
-    // verification confirms on a later chunk). hasPendingChangeAt gates validity.
-    bool hasPendingChangeAt;
-    double pendingChangeAt;
+    // Candidate slide under verification (may span chunk boundaries)
+    int verifyRemaining = 0;                // Stable scores still needed; 0 = not verifying
+    int candidateFrameCount = 0;            // Identical frames seen so far for the candidate
+    double pendingChangeAt = 0.0;           // PTS of the candidate's first frame
 
-    // Verification state management for cross-chunk continuity
-    VerificationState lastFrameVerificationState;  // Verification state of the last frame
-    int verificationStartIndex;             // Global index where current verification started
+    // Global index of newFrames[0] for the chunk being processed
+    int globalFrameOffset = 0;
 
-    // Global frame tracking
-    int globalFrameOffset;                  // Current global frame offset for index calculation
+    void reset() { *this = ProcessingState(); }
 
-    // Memory optimization components
-    std::shared_ptr<MatMemoryPool> memoryPool;  // Shared memory pool for Mat reuse
-
-    /**
-     * Default constructor initializes all fields to safe default values
-     */
-    ProcessingState() :
-        lastStableIndex(-1),
-        lastFrameGlobalIndex(-1),
-        lastFrameTimestamp(0.0),
-        hasPendingChangeAt(false),
-        pendingChangeAt(0.0),
-        lastFrameVerificationState(VerificationState::NONE),
-        verificationStartIndex(-1),
-        globalFrameOffset(0),
-        memoryPool(std::make_shared<MatMemoryPool>(100))  // Initialize with pool size of 100
-    {}
-
-    /**
-     * Reset the processing state for a new video
-     * Clears all accumulated data while preserving the structure
-     */
-    void reset() {
-        savedSlideIndices.clear();
-        lastStableIndex = -1;
-        lastFrameBuffer.reset();
-        lastFrameGlobalIndex = -1;
-        lastFrameTimestamp = 0.0;
-        hasPendingChangeAt = false;
-        pendingChangeAt = 0.0;
-        lastFrameVerificationState = VerificationState::NONE;
-        verificationStartIndex = -1;
-        globalFrameOffset = 0;
-        // Keep memory pool but clean up old buffers
-        if (memoryPool) {
-            memoryPool->cleanupUnusedBuffers(30); // Clean buffers older than 30 seconds
-        }
-    }
-
-    /**
-     * Check if this is the first chunk being processed
-     * @return true if no previous frame exists (first chunk)
-     */
-    bool isFirstChunk() const {
-        return !lastFrameBuffer.isValid();
-    }
-
-    /**
-     * Get the last frame as a Mat view (zero-copy)
-     * @return Mat view of the last frame, or empty Mat if none
-     */
-    cv::Mat getLastFrameView() const {
-        return lastFrameBuffer.isValid() ? lastFrameBuffer.getConstMatView() : cv::Mat();
-    }
-
-    /**
-     * Set the last frame from a FrameBuffer (move operation)
-     * @param frameBuffer FrameBuffer to move
-     */
-    void setLastFrame(FrameBuffer&& frameBuffer) {
-        lastFrameBuffer = std::move(frameBuffer);
-    }
-
-    /**
-     * Set the last frame from a Mat (creates FrameBuffer copy)
-     * @param frame Mat to copy into FrameBuffer
-     */
-    void setLastFrame(const cv::Mat& frame) {
-        lastFrameBuffer = FrameBuffer::fromMat(frame);
-    }
-
-    /**
-     * Update the global frame offset after processing a chunk
-     * @param processedFrameCount Number of new frames processed in the current chunk
-     */
-    void updateGlobalOffset(int processedFrameCount) {
-        globalFrameOffset += processedFrameCount;
-    }
+    bool isFirstChunk() const { return lastFrameGlobalIndex < 0; }
 };
 
 /**
