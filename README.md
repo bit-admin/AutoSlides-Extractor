@@ -139,7 +139,7 @@ sudo xattr -d com.apple.quarantine /Applications/AutoSlides\ Extractor.app
 
 | Component | Recommended |
 | --- | --- |
-| OS | macOS 11+, Windows 10+ x64, or a modern Linux distribution |
+| OS | macOS 13.4+ on Apple Silicon, Windows 10+ x64, or a modern Linux distribution |
 | CPU | Quad-core or better |
 | Memory | 8 GB minimum, 16 GB or more for long recordings |
 | Disk | Enough free space for extracted JPEGs, trash backups, crop backups, and PDFs |
