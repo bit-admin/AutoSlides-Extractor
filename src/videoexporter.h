@@ -10,8 +10,8 @@ struct TimelineData;
 /**
  * @brief Settings for turning a slides folder back into a video.
  *
- * Persisted under the "videoExport/" group of the app's QSettings, shared by
- * the Slides Export dialog and the CLI.
+ * Not persisted: like the PDF settings, the Slides Export dialog starts from
+ * these defaults each time, and the CLI uses them as-is.
  */
 struct VideoExportOptions {
     enum class AudioMode { None, Copy, Compress };
@@ -25,9 +25,6 @@ struct VideoExportOptions {
     int audioBitrateKbps = 48;  // Compress only
     int audioChannels = 1;      // Compress only: 1 = mono, 2 = stereo
     int audioSampleRate = 0;    // Compress only: 0 = keep the source rate (max 48 kHz)
-
-    static VideoExportOptions loadSaved();
-    void save() const;          // audioSourcePath is per folder and is not saved
 
     static QString audioModeToString(AudioMode mode);
     static AudioMode audioModeFromString(const QString& s, AudioMode fallback);

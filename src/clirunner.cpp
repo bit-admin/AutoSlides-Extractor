@@ -517,11 +517,11 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     QCommandLineOption exportVideoOpt(QStringLiteral("export-video"),
         QStringLiteral("After extraction (and post-processing), also write <output>/<name>.mp4: "
                        "the slides as a video, following the timeline, with the input video's "
-                       "audio. Implies --write-timeline. Resolution, quality, repeat interval and "
-                       "audio compression come from the saved Slides Export settings."));
+                       "audio. Implies --write-timeline. Uses the Slides Export defaults: 1080p, "
+                       "CRF 23, a repeat frame every 2 min, AAC 48 kbps mono."));
     QCommandLineOption videoAudioOpt(QStringLiteral("video-audio"),
-        QStringLiteral("Audio for --export-video: copy | compress | none. "
-                       "Default: the saved Slides Export setting."), QStringLiteral("mode"));
+        QStringLiteral("Audio for --export-video: copy | compress | none. Default: compress."),
+        QStringLiteral("mode"));
 
     QCommandLineOption jsonOpt(QStringLiteral("json"),
         QStringLiteral("Emit NDJSON / JSON Lines events to stdout (and JSON errors to stderr) "
@@ -867,7 +867,7 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
 
 int CliRunner::runVideoExportStage(const QString& slidesDir)
 {
-    VideoExportOptions options = VideoExportOptions::loadSaved();
+    VideoExportOptions options; // defaults (export settings are not persisted)
     if (!m_videoAudioMode.isEmpty()) {
         options.audioMode = VideoExportOptions::audioModeFromString(m_videoAudioMode, options.audioMode);
     }

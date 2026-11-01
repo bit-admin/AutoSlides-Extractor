@@ -735,8 +735,8 @@ Common events:
 | `--ml-autocrop-maybe` | flag | Auto-crop `may_be_slide` images before deletion and keep if crop succeeds. |
 | `--ml-postcrop-dedup` | flag | Re-check pHash duplicates after post-process auto-cropping. |
 | `--write-timeline` | flag | Write `timeline.json` media-time map in output slide folders. |
-| `--export-video` | flag | Also write `<output>/<name>.mp4`: the slides as a video following the timeline, with the input video's audio. Implies `--write-timeline`. Resolution, quality, repeat interval and audio compression come from the saved Slides Export settings. |
-| `--video-audio` | mode | Audio for `--export-video`: `copy`, `compress`, or `none`. Default: the saved Slides Export setting. |
+| `--export-video` | flag | Also write `<output>/<name>.mp4`: the slides as a video following the timeline, with the input video's audio. Implies `--write-timeline`. Uses the Slides Export defaults: 1080p, Standard quality (CRF 23), a repeat frame every 2 min. |
+| `--video-audio` | mode | Audio for `--export-video`: `copy`, `compress` (AAC 48 kbps mono), or `none`. Default: `compress`. |
 | `--compatible` | flag | Electron-compatible mode (PNG slides, no `screen_` prefix, skips post-processing). |
 | `--json` | flag | Emit JSON Lines events and suppress the progress bar. |
 | `--help` | flag | Print help. |

@@ -6,7 +6,6 @@
 #include <QStackedWidget>
 #include <QToolButton>
 #include <QCloseEvent>
-#include <QSettings>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -112,12 +111,8 @@ void PdfMakerDialog::setupUI()
 
     mainLayout->addLayout(buttonLayout);
 
-    // Reopen in the mode used last time
-    QSettings settings("AutoSlidesExtractor", "AutoSlidesExtractor");
-    const bool video = settings.value("slidesExport/mode").toString() == "video"
-                       && m_videoModeButton->isEnabled();
-    (video ? m_videoModeButton : m_pdfModeButton)->setChecked(true);
-    m_modeStack->setCurrentIndex(video ? 1 : 0);
+    m_pdfModeButton->setChecked(true);
+    m_modeStack->setCurrentIndex(0);
 }
 
 QWidget* PdfMakerDialog::createVideoPage()
@@ -208,7 +203,7 @@ QWidget* PdfMakerDialog::createVideoPage()
     m_videoTable->setColumnWidth(VCOL_IMAGE_COUNT, 80);
     layout->addWidget(m_videoTable);
 
-    applyVideoOptionsToUi(VideoExportOptions::loadSaved());
+    applyVideoOptionsToUi(VideoExportOptions()); // defaults; not remembered
     return page;
 }
 
@@ -850,8 +845,6 @@ void PdfMakerDialog::onModeChanged()
 {
     const bool video = m_videoModeButton->isChecked();
     m_modeStack->setCurrentIndex(video ? 1 : 0);
-    QSettings("AutoSlidesExtractor", "AutoSlidesExtractor")
-        .setValue("slidesExport/mode", video ? "video" : "pdf");
 
     if (!m_exporting) {
         m_makePdfButton->setText(video ? "Make Video" : "Make PDF");
@@ -926,7 +919,6 @@ void PdfMakerDialog::onVideoSettingChanged()
         return;
     }
     updateAudioControls();
-    videoOptionsFromUi().save();
 }
 
 void PdfMakerDialog::populateVideoTable()
@@ -1072,7 +1064,6 @@ void PdfMakerDialog::onMakeVideo()
     }
 
     const VideoExportOptions baseOptions = videoOptionsFromUi();
-    baseOptions.save();
 
     // One folder: pick the file. Several: pick a new folder (as for batch PDFs).
     QString singlePath;

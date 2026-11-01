@@ -735,8 +735,8 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `--ml-autocrop-maybe` | flag | 在删除 `may_be_slide` 图片前自动裁剪，成功则保留。 |
 | `--ml-postcrop-dedup` | flag | 后处理自动裁剪后重新检测 pHash 重复项。 |
 | `--write-timeline` | flag | 在输出幻灯片文件夹中写入 `timeline.json` 媒体时间映射文件。 |
-| `--export-video` | flag | 额外生成 `<output>/<name>.mp4`：按时间线把幻灯片生成视频，并使用输入视频的音频。隐含 `--write-timeline`。分辨率、画质、重复间隔和音频压缩使用 Slides Export 中保存的设置。 |
-| `--video-audio` | mode | `--export-video` 的音频：`copy`、`compress` 或 `none`。默认使用 Slides Export 中保存的设置。 |
+| `--export-video` | flag | 额外生成 `<output>/<name>.mp4`：按时间线把幻灯片生成视频，并使用输入视频的音频。隐含 `--write-timeline`。使用 Slides Export 的默认设置：1080p、Standard 画质（CRF 23）、每 2 分钟重复一帧。 |
+| `--video-audio` | mode | `--export-video` 的音频：`copy`、`compress`（AAC 48 kbps 单声道）或 `none`。默认 `compress`。 |
 | `--compatible` | flag | Electron 兼容模式（输出 PNG 幻灯片，去除 `screen_` 前缀，跳过后处理）。 |
 | `--json` | flag | 输出 JSON Lines 并关闭文本进度条。 |
 | `--help` | flag | 打印帮助。 |

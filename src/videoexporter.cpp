@@ -7,7 +7,6 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
-#include <QSettings>
 
 #include <opencv2/opencv.hpp>
 
@@ -28,18 +27,8 @@ extern "C" {
 }
 
 // ---------------------------------------------------------------------------
-// Options persistence
+// Options
 // ---------------------------------------------------------------------------
-
-namespace {
-
-QSettings& settings()
-{
-    static QSettings s(QStringLiteral("AutoSlidesExtractor"), QStringLiteral("AutoSlidesExtractor"));
-    return s;
-}
-
-} // namespace
 
 QString VideoExportOptions::audioModeToString(AudioMode mode)
 {
@@ -58,40 +47,6 @@ VideoExportOptions::AudioMode VideoExportOptions::audioModeFromString(const QStr
     if (v == QLatin1String("copy"))     return AudioMode::Copy;
     if (v == QLatin1String("compress")) return AudioMode::Compress;
     return fallback;
-}
-
-VideoExportOptions VideoExportOptions::loadSaved()
-{
-    VideoExportOptions o;
-    QSettings& s = settings();
-    s.beginGroup(QStringLiteral("videoExport"));
-    o.targetHeight = s.value(QStringLiteral("targetHeight"), o.targetHeight).toInt();
-    o.crf = std::clamp(s.value(QStringLiteral("crf"), o.crf).toInt(), 0, 51);
-    o.repeatSeconds = std::max(0, s.value(QStringLiteral("repeatSeconds"), o.repeatSeconds).toInt());
-    o.audioMode = audioModeFromString(s.value(QStringLiteral("audioMode")).toString(), o.audioMode);
-    if (o.audioMode == AudioMode::None) {
-        o.audioMode = AudioMode::Compress; // "no audio" is decided per folder by the source
-    }
-    o.audioBitrateKbps = std::clamp(s.value(QStringLiteral("audioBitrateKbps"), o.audioBitrateKbps).toInt(), 16, 320);
-    o.audioChannels = std::clamp(s.value(QStringLiteral("audioChannels"), o.audioChannels).toInt(), 1, 2);
-    o.audioSampleRate = std::max(0, s.value(QStringLiteral("audioSampleRate"), o.audioSampleRate).toInt());
-    s.endGroup();
-    return o;
-}
-
-void VideoExportOptions::save() const
-{
-    QSettings& s = settings();
-    s.beginGroup(QStringLiteral("videoExport"));
-    s.setValue(QStringLiteral("targetHeight"), targetHeight);
-    s.setValue(QStringLiteral("crf"), crf);
-    s.setValue(QStringLiteral("repeatSeconds"), repeatSeconds);
-    s.setValue(QStringLiteral("audioMode"), audioModeToString(audioMode));
-    s.setValue(QStringLiteral("audioBitrateKbps"), audioBitrateKbps);
-    s.setValue(QStringLiteral("audioChannels"), audioChannels);
-    s.setValue(QStringLiteral("audioSampleRate"), audioSampleRate);
-    s.endGroup();
-    s.sync();
 }
 
 // ---------------------------------------------------------------------------
