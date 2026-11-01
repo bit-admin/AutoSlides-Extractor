@@ -2,6 +2,7 @@
 #include "processingthread.h"
 #include "videoqueue.h"
 #include "videoexporter.h"
+#include "pdfexporter.h"
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
@@ -32,6 +33,7 @@ constexpr int EXIT_BAD_INPUT = 3;
 constexpr int EXIT_PROCESSING_FAILED = 4;
 constexpr int EXIT_POSTPROCESSING_FAILED = 5;
 constexpr int EXIT_VIDEO_EXPORT_FAILED = 6;
+constexpr int EXIT_PDF_EXPORT_FAILED = 7;
 constexpr int EXIT_CANCELLED_SIGINT = 130;
 constexpr int EXIT_CANCELLED_SIGTERM = 143;
 
@@ -425,6 +427,14 @@ int CliRunner::run(const QStringList& arguments)
         }
     }
 
+    if (m_exportPdf) {
+        int pdfRc = runPdfExportStage(slidesDir);
+        if (pdfRc != EXIT_OK) {
+            uninstallSignalHandlers();
+            return pdfRc;
+        }
+    }
+
     if (m_exportVideo) {
         int videoRc = runVideoExportStage(slidesDir);
         if (videoRc != EXIT_OK) {
@@ -514,14 +524,45 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
                        "folder. Off by default (does not inherit GUI setting). Compatible with "
                        "--compatible."));
 
+    QCommandLineOption exportPdfOpt(QStringLiteral("export-pdf"),
+        QStringLiteral("After extraction (and post-processing), also write <output>/<name>.pdf "
+                       "with the remaining slides, as Slides Export does. Not allowed with --compatible."));
+    QCommandLineOption pdfReduceOpt(QStringLiteral("pdf-reduce-size"),
+        QStringLiteral("PDF: crop to --pdf-aspect, scale to --pdf-height and re-encode as JPEG: "
+                       "true|false. Default: true. false keeps every image as-is."), QStringLiteral("bool"));
+    QCommandLineOption pdfAspectOpt(QStringLiteral("pdf-aspect"),
+        QStringLiteral("PDF page aspect ratio: 16:9 | 4:3. Default: 16:9."), QStringLiteral("ratio"));
+    QCommandLineOption pdfHeightOpt(QStringLiteral("pdf-height"),
+        QStringLiteral("PDF page height in pixels (e.g. 1080, 720, 480, 360); 0 = original. Default: 720."),
+        QStringLiteral("px"));
+    QCommandLineOption pdfQualityOpt(QStringLiteral("pdf-jpeg-quality"),
+        QStringLiteral("PDF JPEG quality 1..100. Default: 50."), QStringLiteral("n"));
+
     QCommandLineOption exportVideoOpt(QStringLiteral("export-video"),
         QStringLiteral("After extraction (and post-processing), also write <output>/<name>.mp4: "
                        "the slides as a video, following the timeline, with the input video's "
-                       "audio. Implies --write-timeline. Uses the Slides Export defaults: 1080p, "
-                       "CRF 23, a repeat frame every 2 min, AAC 48 kbps mono."));
+                       "audio. Implies --write-timeline."));
+    QCommandLineOption videoHeightOpt(QStringLiteral("video-height"),
+        QStringLiteral("Video height in pixels (e.g. 1080, 720, 480); 0 = slide size. Slides are "
+                       "never scaled up. Default: 1080."), QStringLiteral("px"));
+    QCommandLineOption videoCrfOpt(QStringLiteral("video-crf"),
+        QStringLiteral("H.264 quality 0..51, lower is better (18 high, 23 standard, 28 small). "
+                       "Default: 23."), QStringLiteral("n"));
+    QCommandLineOption videoRepeatOpt(QStringLiteral("video-repeat"),
+        QStringLiteral("Repeat the current slide every N seconds; 0 = only at slide changes. "
+                       "Default: 120."), QStringLiteral("seconds"));
     QCommandLineOption videoAudioOpt(QStringLiteral("video-audio"),
         QStringLiteral("Audio for --export-video: copy | compress | none. Default: compress."),
         QStringLiteral("mode"));
+    QCommandLineOption videoAudioBitrateOpt(QStringLiteral("video-audio-bitrate"),
+        QStringLiteral("AAC bitrate in kbps for --video-audio compress (16..320). Default: 48."),
+        QStringLiteral("kbps"));
+    QCommandLineOption videoAudioChannelsOpt(QStringLiteral("video-audio-channels"),
+        QStringLiteral("AAC channels for --video-audio compress: 1 (mono) | 2 (stereo). Default: 1."),
+        QStringLiteral("n"));
+    QCommandLineOption videoAudioRateOpt(QStringLiteral("video-audio-rate"),
+        QStringLiteral("AAC sample rate in Hz for --video-audio compress (8000..48000); 0 = source "
+                       "rate (max 48000). Default: 0."), QStringLiteral("hz"));
 
     QCommandLineOption jsonOpt(QStringLiteral("json"),
         QStringLiteral("Emit NDJSON / JSON Lines events to stdout (and JSON errors to stderr) "
@@ -558,8 +599,19 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(mlAutoCropMaybeOpt);
     parser.addOption(mlPostCropDedupOpt);
     parser.addOption(writeTimelineOpt);
+    parser.addOption(exportPdfOpt);
+    parser.addOption(pdfReduceOpt);
+    parser.addOption(pdfAspectOpt);
+    parser.addOption(pdfHeightOpt);
+    parser.addOption(pdfQualityOpt);
     parser.addOption(exportVideoOpt);
+    parser.addOption(videoHeightOpt);
+    parser.addOption(videoCrfOpt);
+    parser.addOption(videoRepeatOpt);
     parser.addOption(videoAudioOpt);
+    parser.addOption(videoAudioBitrateOpt);
+    parser.addOption(videoAudioChannelsOpt);
+    parser.addOption(videoAudioRateOpt);
     parser.addOption(jsonOpt);
     parser.addOption(compatibleOpt);
 
@@ -732,21 +784,100 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     }
     m_config.writeTimeline = parser.isSet(writeTimelineOpt);
 
+    // --- export: settings start from the Slides Export defaults ------------
+    auto intOption = [&](const QCommandLineOption& opt, int lo, int hi, int* out) {
+        bool okInt = false;
+        const int v = parser.value(opt).toInt(&okInt);
+        if (!okInt || v < lo || v > hi) {
+            *errorOut = QStringLiteral("--%1 must be an integer in %2..%3")
+                            .arg(opt.names().first()).arg(lo).arg(hi);
+            return false;
+        }
+        *out = v;
+        return true;
+    };
+    auto needsParent = [&](const QList<const QCommandLineOption*>& opts, bool enabled, const QString& parent) {
+        for (const QCommandLineOption* opt : opts) {
+            if (parser.isSet(*opt) && !enabled) {
+                *errorOut = QStringLiteral("--%1 requires --%2").arg(opt->names().first(), parent);
+                return false;
+            }
+        }
+        return true;
+    };
+
+    m_exportPdf = parser.isSet(exportPdfOpt);
+    if (m_exportPdf && m_config.compatibleMode) {
+        *errorOut = QStringLiteral("--export-pdf is not allowed with --compatible");
+        return false;
+    }
+    if (!needsParent({&pdfReduceOpt, &pdfAspectOpt, &pdfHeightOpt, &pdfQualityOpt}, m_exportPdf,
+                  QStringLiteral("export-pdf"))) {
+        return false;
+    }
+    m_pdfOptions = PdfExportOptions();
+    m_pdfOptions.reduceSize = true;   // Slides Export defaults
+    m_pdfOptions.targetHeight = 720;
+    m_pdfOptions.jpegQuality = 50;
+    m_pdfOptions.targetAspect = 16.0 / 9.0;
+    if (parser.isSet(pdfReduceOpt)) {
+        bool b = true;
+        if (!parseBoolFlag(parser.value(pdfReduceOpt), &b)) {
+            *errorOut = QStringLiteral("--pdf-reduce-size must be true or false");
+            return false;
+        }
+        m_pdfOptions.reduceSize = b;
+    }
+    if (parser.isSet(pdfAspectOpt)) {
+        const QString ratio = parser.value(pdfAspectOpt).trimmed();
+        if (ratio == QLatin1String("16:9")) {
+            m_pdfOptions.targetAspect = 16.0 / 9.0;
+        } else if (ratio == QLatin1String("4:3")) {
+            m_pdfOptions.targetAspect = 4.0 / 3.0;
+        } else {
+            *errorOut = QStringLiteral("--pdf-aspect must be 16:9 or 4:3");
+            return false;
+        }
+    }
+    if (parser.isSet(pdfHeightOpt) && !intOption(pdfHeightOpt, 0, 8640, &m_pdfOptions.targetHeight)) return false;
+    if (parser.isSet(pdfQualityOpt) && !intOption(pdfQualityOpt, 1, 100, &m_pdfOptions.jpegQuality)) return false;
+
     m_exportVideo = parser.isSet(exportVideoOpt);
     if (m_exportVideo) {
         m_config.writeTimeline = true; // the video follows the timeline
     }
+    if (!needsParent({&videoHeightOpt, &videoCrfOpt, &videoRepeatOpt, &videoAudioOpt, &videoAudioBitrateOpt,
+                   &videoAudioChannelsOpt, &videoAudioRateOpt}, m_exportVideo, QStringLiteral("export-video"))) {
+        return false;
+    }
+    m_videoOptions = VideoExportOptions();
     if (parser.isSet(videoAudioOpt)) {
         const QString mode = parser.value(videoAudioOpt).trimmed().toLower();
         if (mode != QLatin1String("copy") && mode != QLatin1String("compress") && mode != QLatin1String("none")) {
             *errorOut = QStringLiteral("--video-audio must be copy, compress or none");
             return false;
         }
-        if (!m_exportVideo) {
-            *errorOut = QStringLiteral("--video-audio requires --export-video");
+        m_videoOptions.audioMode = VideoExportOptions::audioModeFromString(mode, m_videoOptions.audioMode);
+    }
+    if (parser.isSet(videoHeightOpt) && !intOption(videoHeightOpt, 0, 4320, &m_videoOptions.targetHeight)) return false;
+    if (parser.isSet(videoCrfOpt) && !intOption(videoCrfOpt, 0, 51, &m_videoOptions.crf)) return false;
+    if (parser.isSet(videoRepeatOpt) && !intOption(videoRepeatOpt, 0, 86400, &m_videoOptions.repeatSeconds)) return false;
+    if (parser.isSet(videoAudioBitrateOpt)
+        && !intOption(videoAudioBitrateOpt, 16, 320, &m_videoOptions.audioBitrateKbps)) return false;
+    if (parser.isSet(videoAudioChannelsOpt)
+        && !intOption(videoAudioChannelsOpt, 1, 2, &m_videoOptions.audioChannels)) return false;
+    if (parser.isSet(videoAudioRateOpt)) {
+        if (!intOption(videoAudioRateOpt, 0, 48000, &m_videoOptions.audioSampleRate)) return false;
+        if (m_videoOptions.audioSampleRate != 0 && m_videoOptions.audioSampleRate < 8000) {
+            *errorOut = QStringLiteral("--video-audio-rate must be 0 or 8000..48000");
             return false;
         }
-        m_videoAudioMode = mode;
+    }
+    const bool compressFlags = parser.isSet(videoAudioBitrateOpt) || parser.isSet(videoAudioChannelsOpt)
+                               || parser.isSet(videoAudioRateOpt);
+    if (compressFlags && m_videoOptions.audioMode != VideoExportOptions::AudioMode::Compress) {
+        *errorOut = QStringLiteral("--video-audio-bitrate/-channels/-rate only apply to --video-audio compress");
+        return false;
     }
 
     return true;
@@ -867,10 +998,7 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
 
 int CliRunner::runVideoExportStage(const QString& slidesDir)
 {
-    VideoExportOptions options; // defaults (export settings are not persisted)
-    if (!m_videoAudioMode.isEmpty()) {
-        options.audioMode = VideoExportOptions::audioModeFromString(m_videoAudioMode, options.audioMode);
-    }
+    VideoExportOptions options = m_videoOptions;
     options.audioSourcePath = m_videoPath;
 
     QString name = QFileInfo(slidesDir).fileName();
@@ -937,6 +1065,49 @@ int CliRunner::runVideoExportStage(const QString& slidesDir)
                         .arg(result.frames)
                         .arg(result.chapters)
                         .arg(result.audioInfo));
+    }
+    return EXIT_OK;
+}
+
+int CliRunner::runPdfExportStage(const QString& slidesDir)
+{
+    QString name = QFileInfo(slidesDir).fileName();
+    if (name.startsWith(QLatin1String("slides_"))) {
+        name = name.mid(7);
+    }
+    const QString outPath = QDir(m_outputDir).filePath(name + QStringLiteral(".pdf"));
+
+    // Same images and order as Slides Export (trashed slides are already gone)
+    QStringList images;
+    for (const QString& file : VideoExporter::slideImagesInOrder(slidesDir)) {
+        images << QDir(slidesDir).filePath(file);
+    }
+    if (!m_jsonMode) {
+        writeStdout(QStringLiteral("[pdf] writing ") + outPath);
+    }
+    const int pages = images.isEmpty() ? 0 : PdfExporter::exportToPdf(images, outPath, m_pdfOptions);
+    if (pages <= 0) {
+        const QString msg = images.isEmpty()
+            ? QStringLiteral("PDF export failed: no slide images left in ") + slidesDir
+            : QStringLiteral("PDF export failed: could not write ") + outPath;
+        if (m_jsonMode) {
+            emitError(QStringLiteral("pdf_export"), msg, EXIT_PDF_EXPORT_FAILED);
+        } else {
+            writeStderr(QStringLiteral("error: ") + msg);
+        }
+        return EXIT_PDF_EXPORT_FAILED;
+    }
+
+    const qint64 bytes = QFileInfo(outPath).size();
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("path"), outPath);
+        obj.insert(QStringLiteral("bytes"), bytes);
+        obj.insert(QStringLiteral("pages"), pages);
+        emitEvent(QStringLiteral("pdf_exported"), obj);
+    } else {
+        writeStdout(QString(QStringLiteral("[pdf] %1 (%2 pages, %3 MB)"))
+                        .arg(outPath).arg(pages).arg(bytes / 1048576.0, 0, 'f', 1));
     }
     return EXIT_OK;
 }
