@@ -302,7 +302,7 @@ jobs:
           [ "$chapters" -ge 1 ] || { echo "::error::expected >= 1 chapter, got $chapters"; exit 1; }
 
           # Opus audio (libopus in the bundled FFmpeg), at the lowest suggested bitrate
-          "$app" --video lecture.mp4 --output out-opus --json --write-timeline \
+          "$exe" --video lecture.mp4 --output out-opus --json --write-timeline \
             --export-video --video-audio opus --video-audio-bitrate 12 > opus.ndjson
           grep '"event":"video_exported"' opus.ndjson || { cat opus.ndjson; echo "::error::Opus video export failed"; exit 1; }
           ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 out-opus/lecture.mp4 | tee streams-opus.txt
