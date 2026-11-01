@@ -118,8 +118,13 @@ jobs:
           # No compiler version in the key: vcpkg's own ABI hashes decide what
           # is reusable, and one entry can hold packages for several runner images.
           key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
+          # Same manifest first; else any entry for this vcpkg + triplet, so a
+          # vcpkg.json change rebuilds only what changed (vcpkg's ABI hashes decide
+          # what is reusable; the prune step drops what stays unused). To force a
+          # cold build, rename the vcpkg-bin prefix in the key and restore-keys.
           restore-keys: |
             vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Setup vcpkg (pinned)
         run: |

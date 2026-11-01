@@ -16,7 +16,8 @@
 #   7. Info.plist (LSMinimumSystemVersion = highest minos found in the bundle)
 #   8. Ad-hoc codesign (inside-out) + strict verify
 #   9. Verify: no missing / external dylibs, VideoToolbox + ONNX present, --version runs
-#  10. DMG (LZMA, "ULMO"): "AutoSlides Extractor.app" + /Applications link
+#  10. DMG (LZMA, "ULMO"): "AutoSlides Extractor.app" + /Applications link, with the
+#      window layout from installer/dmg (background, icon positions) via dmgbuild
 #
 # Usage:
 #   installer/package-macos.sh [build-dir]        (default: build)
@@ -27,12 +28,15 @@
 #   MACOS_DEPLOYMENT_TARGET  macOS version our own code and vcpkg libs are built for
 #                            (default 12.0). Any of those built for a newer macOS fails.
 #   OUT_DIR                  where the .dmg is written (default: <build-dir>)
+#   DMGBUILD                 dmgbuild executable (default: dmgbuild on PATH). Required
+#                            on CI; locally, a plain DMG is made without it.
 #
 # Artifact:
 #   AutoSlides.Extractor-<ver>-macOS-arm64.dmg
 #
 # The app is ad-hoc signed (no Developer ID): users clear quarantine once with
-#   xattr -dr com.apple.quarantine "/Applications/AutoSlides Extractor.app"
+#   sudo xattr -d com.apple.quarantine "/Applications/AutoSlides Extractor.app"
+# (shown in the DMG window)
 # or System Settings → Privacy & Security → Open Anyway.
 
 emulate -L zsh
@@ -497,16 +501,40 @@ ditto "$STAGE_APP" "$DMG_ROOT/${APP_DISPLAY_NAME}.app"
 ln -s /Applications "$DMG_ROOT/Applications"
 codesign --verify --deep --strict "$DMG_ROOT/${APP_DISPLAY_NAME}.app" || die "signature broken after copy"
 
-# ULMO = LZMA (smallest; macOS 10.15+). hdiutil is occasionally "Resource busy" on CI.
-for attempt in 1 2 3; do
-  if hdiutil create -volname "$APP_DISPLAY_NAME $VERSION" -srcfolder "$DMG_ROOT" \
-       -fs HFS+ -format ULMO -ov "$DMG_PATH"; then
-    break
+# Window layout (installer/dmg): background with the install steps, app icon on
+# the left, Applications on the right. Needs dmgbuild (pip); without it, a plain
+# DMG with the same contents. ULMO = LZMA (smallest; macOS 10.15+).
+# hdiutil is occasionally "Resource busy" on CI, so retry.
+DMG_DESIGN="$ROOT/installer/dmg"
+dmgbuild_bin="${DMGBUILD:-$(command -v dmgbuild || true)}"
+if [[ -n "$dmgbuild_bin" ]]; then
+  for attempt in 1 2 3; do
+    rm -f "$DMG_PATH"
+    if "$dmgbuild_bin" -s "$DMG_DESIGN/dmg-settings.py" \
+         -D app="$DMG_ROOT/${APP_DISPLAY_NAME}.app" \
+         -D background="$DMG_DESIGN/background.png" \
+         "$APP_DISPLAY_NAME $VERSION" "$DMG_PATH"; then
+      break
+    fi
+    (( attempt < 3 )) || die "dmgbuild failed"
+    log "dmgbuild failed, retrying in 5 s"
+    sleep 5
+  done
+else
+  if [[ -n "${CI:-}" ]]; then
+    die "dmgbuild not found (set DMGBUILD); CI builds must have the DMG window layout"
   fi
-  (( attempt < 3 )) || die "hdiutil create failed"
-  log "hdiutil create failed, retrying in 5 s"
-  sleep 5
-done
+  log "dmgbuild not found: plain DMG without the window layout (pip install dmgbuild)"
+  for attempt in 1 2 3; do
+    if hdiutil create -volname "$APP_DISPLAY_NAME $VERSION" -srcfolder "$DMG_ROOT" \
+         -fs HFS+ -format ULMO -ov "$DMG_PATH"; then
+      break
+    fi
+    (( attempt < 3 )) || die "hdiutil create failed"
+    log "hdiutil create failed, retrying in 5 s"
+    sleep 5
+  done
+fi
 hdiutil verify "$DMG_PATH" >/dev/null || die "hdiutil verify failed"
 
 info "Done"
