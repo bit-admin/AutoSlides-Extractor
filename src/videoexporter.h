@@ -14,20 +14,29 @@ struct TimelineData;
  * these defaults each time, and the CLI uses them as-is.
  */
 struct VideoExportOptions {
-    enum class AudioMode { None, Copy, Compress };
+    enum class AudioMode { None, Copy, Aac, Opus };
 
     int targetHeight = 1080;    // canvas height; 0 = size of the slides themselves
     int crf = 23;               // x264 constant quality (lower = better/larger)
     int repeatSeconds = 120;    // re-send the current slide this often; 0 = only at changes
 
-    AudioMode audioMode = AudioMode::Compress;
+    AudioMode audioMode = AudioMode::Aac;
     QString audioSourcePath;    // original video or an audio file; empty = silent video
-    int audioBitrateKbps = 48;  // Compress only
-    int audioChannels = 1;      // Compress only: 1 = mono, 2 = stereo
-    int audioSampleRate = 0;    // Compress only: 0 = keep the source rate (max 48 kHz)
+    int audioBitrateKbps = 48;  // Aac/Opus
+    int audioChannels = 1;      // Aac/Opus: 1 = mono, 2 = stereo
+    int audioSampleRate = 0;    // Aac only: 0 = keep the source rate (max 48 kHz).
+                                // Opus always encodes at 48 kHz and picks its own
+                                // audio bandwidth from the bitrate.
 
+    static bool isCompressed(AudioMode mode) { return mode == AudioMode::Aac || mode == AudioMode::Opus; }
     static QString audioModeToString(AudioMode mode);
+    /** "none" | "copy" | "aac" | "opus"; "compress" is accepted as "aac". */
     static AudioMode audioModeFromString(const QString& s, AudioMode fallback);
+    /** Bitrate choices (kbps) offered for a codec, and the default among them. */
+    static QList<int> bitrateChoices(AudioMode mode);
+    static int defaultBitrateKbps(AudioMode mode);
+    static int minBitrateKbps(AudioMode mode);
+    static int maxBitrateKbps(AudioMode mode);
 };
 
 struct VideoExportResult {
@@ -55,7 +64,7 @@ struct VideoExportResult {
  * plus an optional repeat of the current slide every repeatSeconds so players
  * that seek to the next frame are never far off. Each slide gets a chapter
  * named after its PDF page number. Audio is copied from the source, or
- * re-encoded to AAC, or left out.
+ * re-encoded to AAC or Opus, or left out.
  */
 class VideoExporter
 {
@@ -88,6 +97,9 @@ public:
 
     /** True if this FFmpeg build has an H.264 encoder. */
     static bool isAvailable();
+
+    /** True if this FFmpeg build has the libopus encoder. */
+    static bool isOpusAvailable();
 };
 
 #endif // VIDEOEXPORTER_H

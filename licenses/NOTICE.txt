@@ -16,6 +16,7 @@ Release builds (this package)
   Bundled components keep their own licences:
     FFmpeg        GPL-3.0-or-later in this configuration  https://ffmpeg.org
     x264          GPL-2.0-or-later                        https://www.videolan.org/developers/x264.html
+    Opus          BSD-3-Clause                            https://opus-codec.org
     Qt 6          LGPL-3.0                                https://www.qt.io
     OpenCV        Apache-2.0                              https://opencv.org
     ONNX Runtime  MIT                                     https://onnxruntime.ai
@@ -24,8 +25,9 @@ Corresponding source
   AutoSlides Extractor: https://github.com/bit-admin/AutoSlides-Extractor
     (the tag matching this version; build scripts are in .github/workflows
     and installer/).
-  FFmpeg, x264, OpenCV: built by vcpkg from the ports pinned by VCPKG_COMMIT
+  FFmpeg, x264, Opus, OpenCV: built by vcpkg from the ports pinned by VCPKG_COMMIT
     in .github/workflows (vcpkg tag 2026.07.29) with the features listed in
     vcpkg.json:
       https://github.com/microsoft/vcpkg/tree/2026.07.29/ports/ffmpeg
       https://github.com/microsoft/vcpkg/tree/2026.07.29/ports/x264
+      https://github.com/microsoft/vcpkg/tree/2026.07.29/ports/opus

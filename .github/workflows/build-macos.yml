@@ -281,7 +281,7 @@ jobs:
                  -filter_complex "[0:v][1:v][2:v]concat=n=3:v=1,format=yuv420p[v]" \
                  -map "[v]" -map 3:a -c:v libx264 -g 60 -c:a aac -b:a 96k lecture.mp4
           "$exe" --video lecture.mp4 --output out --json --phash-redundant --ml-classify --write-timeline \
-            --export-pdf --export-video --video-audio compress | tee events.ndjson
+            --export-pdf --export-video --video-audio aac | tee events.ndjson
           done_line="$(grep '"event":"done"' events.ndjson)"
           echo "$done_line" | grep -q '"exitCode":0' || { echo "::error::CLI smoke test failed"; exit 1; }
           count="$(echo "$done_line" | sed -E 's/.*"slideCount":([0-9]+).*/\1/')"
@@ -300,6 +300,15 @@ jobs:
           awk -v d="$dur" 'BEGIN { exit !(d > 34 && d < 38) }' || { echo "::error::exported duration $dur, expected ~36 s"; exit 1; }
           chapters="$(ffprobe -v error -show_chapters -of csv=p=0 out/lecture.mp4 | wc -l | tr -d ' ')"
           [ "$chapters" -ge 1 ] || { echo "::error::expected >= 1 chapter, got $chapters"; exit 1; }
+
+          # Opus audio (libopus in the bundled FFmpeg), at the lowest suggested bitrate
+          "$app" --video lecture.mp4 --output out-opus --json --write-timeline \
+            --export-video --video-audio opus --video-audio-bitrate 12 > opus.ndjson
+          grep '"event":"video_exported"' opus.ndjson || { cat opus.ndjson; echo "::error::Opus video export failed"; exit 1; }
+          ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 out-opus/lecture.mp4 | tee streams-opus.txt
+          grep -q '^opus,audio' streams-opus.txt || { echo "::error::exported video has no Opus track"; exit 1; }
+          dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 out-opus/lecture.mp4)"
+          awk -v d="$dur" 'BEGIN { exit !(d > 34 && d < 38) }' || { echo "::error::Opus export duration $dur, expected ~36 s"; exit 1; }
           # Informational: VMs may not expose hardware decoding, so this is not a gate.
           grep -o 'Decoder: [A-Za-z0-9_]*' events.ndjson || true
 

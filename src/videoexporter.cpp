@@ -35,9 +35,10 @@ QString VideoExportOptions::audioModeToString(AudioMode mode)
     switch (mode) {
     case AudioMode::None:     return QStringLiteral("none");
     case AudioMode::Copy:     return QStringLiteral("copy");
-    case AudioMode::Compress: return QStringLiteral("compress");
+    case AudioMode::Aac:      return QStringLiteral("aac");
+    case AudioMode::Opus:     return QStringLiteral("opus");
     }
-    return QStringLiteral("compress");
+    return QStringLiteral("aac");
 }
 
 VideoExportOptions::AudioMode VideoExportOptions::audioModeFromString(const QString& s, AudioMode fallback)
@@ -45,8 +46,33 @@ VideoExportOptions::AudioMode VideoExportOptions::audioModeFromString(const QStr
     const QString v = s.trimmed().toLower();
     if (v == QLatin1String("none"))     return AudioMode::None;
     if (v == QLatin1String("copy"))     return AudioMode::Copy;
-    if (v == QLatin1String("compress")) return AudioMode::Compress;
+    if (v == QLatin1String("aac") || v == QLatin1String("compress")) return AudioMode::Aac;
+    if (v == QLatin1String("opus"))     return AudioMode::Opus;
     return fallback;
+}
+
+QList<int> VideoExportOptions::bitrateChoices(AudioMode mode)
+{
+    if (mode == AudioMode::Opus) {
+        return {8, 12, 16, 24, 32, 48};
+    }
+    return {16, 24, 32, 48, 64, 96, 128};
+}
+
+int VideoExportOptions::defaultBitrateKbps(AudioMode mode)
+{
+    // Opus 16 kbps mono is clear speech; FFmpeg's AAC needs about 48 for the same.
+    return mode == AudioMode::Opus ? 16 : 48;
+}
+
+int VideoExportOptions::minBitrateKbps(AudioMode mode)
+{
+    return mode == AudioMode::Opus ? 6 : 16;
+}
+
+int VideoExportOptions::maxBitrateKbps(AudioMode mode)
+{
+    return mode == AudioMode::Opus ? 256 : 320;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +320,11 @@ bool VideoExporter::isAvailable()
     return findH264Encoder(&x264) != nullptr;
 }
 
+bool VideoExporter::isOpusAvailable()
+{
+    return avcodec_find_encoder_by_name("libopus") != nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
@@ -446,7 +477,7 @@ VideoExportResult VideoExporter::exportFolder(const QString& slidesDir,
         copyAudio = options.audioMode == VideoExportOptions::AudioMode::Copy
                     && avformat_query_codec(out.ctx->oformat, inSt->codecpar->codec_id, FF_COMPLIANCE_NORMAL) == 1;
         if (options.audioMode == VideoExportOptions::AudioMode::Copy && !copyAudio) {
-            result.warnings << QStringLiteral("%1 audio cannot go in MP4; re-encoded as AAC")
+            result.warnings << QStringLiteral("%1 audio cannot go in MP4; re-encoded as AAC 48 kbps")
                                    .arg(QString::fromUtf8(avcodec_get_name(inSt->codecpar->codec_id)));
         }
 
@@ -457,11 +488,18 @@ VideoExportResult VideoExporter::exportFolder(const QString& slidesDir,
             ast->time_base = inSt->time_base;
             result.audioInfo = QStringLiteral("copied (%1)").arg(QString::fromUtf8(avcodec_get_name(inSt->codecpar->codec_id)));
         } else {
+            // Copy that cannot go in MP4 falls back to AAC
+            const bool opus = options.audioMode == VideoExportOptions::AudioMode::Opus;
+            const VideoExportOptions::AudioMode codecMode = opus ? VideoExportOptions::AudioMode::Opus
+                                                                 : VideoExportOptions::AudioMode::Aac;
+            const char* codecName = opus ? "Opus" : "AAC";
             const AVCodec* dcodec = avcodec_find_decoder(inSt->codecpar->codec_id);
-            const AVCodec* ecodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+            const AVCodec* ecodec = opus ? avcodec_find_encoder_by_name("libopus")
+                                         : avcodec_find_encoder(AV_CODEC_ID_AAC);
             if (!dcodec || !ecodec) {
-                return fail(QStringLiteral("No decoder for %1 audio, or no AAC encoder")
-                                .arg(QString::fromUtf8(avcodec_get_name(inSt->codecpar->codec_id))));
+                return fail(QStringLiteral("No decoder for %1 audio, or no %2 encoder")
+                                .arg(QString::fromUtf8(avcodec_get_name(inSt->codecpar->codec_id)),
+                                     QString::fromLatin1(codecName)));
             }
             adec.reset(avcodec_alloc_context3(dcodec));
             avcodec_parameters_to_context(adec.get(), inSt->codecpar);
@@ -471,19 +509,36 @@ VideoExportResult VideoExporter::exportFolder(const QString& slidesDir,
             }
 
             const int channels = std::clamp(options.audioChannels, 1, 2);
-            const int rate = nearestAacSampleRate(options.audioSampleRate > 0 ? options.audioSampleRate
-                                                                              : adec->sample_rate);
+            // Opus runs at 48 kHz and narrows its audio bandwidth to suit the bitrate
+            const int rate = opus ? 48000
+                                  : nearestAacSampleRate(options.audioSampleRate > 0 ? options.audioSampleRate
+                                                                                     : adec->sample_rate);
+            const int requestedKbps = VideoExportOptions::isCompressed(options.audioMode)
+                                          ? options.audioBitrateKbps
+                                          : VideoExportOptions::defaultBitrateKbps(codecMode);
+            const int kbps = std::clamp(requestedKbps,
+                                        VideoExportOptions::minBitrateKbps(codecMode),
+                                        VideoExportOptions::maxBitrateKbps(codecMode));
             aenc.reset(avcodec_alloc_context3(ecodec));
             av_channel_layout_default(&aenc->ch_layout, channels);
             aenc->sample_rate = rate;
-            aenc->sample_fmt = AV_SAMPLE_FMT_FLTP;
-            aenc->bit_rate = int64_t(std::clamp(options.audioBitrateKbps, 16, 320)) * 1000;
+            aenc->sample_fmt = opus ? AV_SAMPLE_FMT_FLT : AV_SAMPLE_FMT_FLTP;
+            aenc->bit_rate = int64_t(kbps) * 1000;
             aenc->time_base = AVRational{1, rate};
             if (out.ctx->oformat->flags & AVFMT_GLOBALHEADER) {
                 aenc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
             }
-            if ((ret = avcodec_open2(aenc.get(), ecodec, nullptr)) < 0) {
-                return fail(QStringLiteral("Cannot open AAC encoder: %1").arg(avErr(ret)));
+            AVDictionary* encOpts = nullptr;
+            if (opus) {
+                // Tuned for speech. 60 ms frames: MP4 stores a per-packet entry, so
+                // the default 20 ms frames add ~5 kbps, a third of a 16 kbps stream.
+                av_dict_set(&encOpts, "application", "voip", 0);
+                av_dict_set(&encOpts, "frame_duration", "60", 0);
+            }
+            ret = avcodec_open2(aenc.get(), ecodec, &encOpts);
+            av_dict_free(&encOpts);
+            if (ret < 0) {
+                return fail(QStringLiteral("Cannot open %1 encoder: %2").arg(QString::fromLatin1(codecName), avErr(ret)));
             }
             avcodec_parameters_from_context(ast->codecpar, aenc.get());
             ast->time_base = aenc->time_base;
@@ -503,10 +558,10 @@ VideoExportResult VideoExporter::exportFolder(const QString& slidesDir,
                 return fail(QStringLiteral("Cannot set up audio conversion: %1").arg(avErr(ret)));
             }
             fifo.reset(av_audio_fifo_alloc(aenc->sample_fmt, channels, aenc->frame_size > 0 ? aenc->frame_size * 4 : 4096));
-            result.audioInfo = QStringLiteral("AAC %1 kbps %2, %3 kHz")
-                                   .arg(options.audioBitrateKbps)
-                                   .arg(channels == 1 ? QStringLiteral("mono") : QStringLiteral("stereo"))
-                                   .arg(rate / 1000.0, 0, 'g', 3);
+            const QString layout = channels == 1 ? QStringLiteral("mono") : QStringLiteral("stereo");
+            result.audioInfo = opus ? QStringLiteral("Opus %1 kbps %2").arg(kbps).arg(layout)
+                                    : QStringLiteral("AAC %1 kbps %2, %3 kHz")
+                                          .arg(kbps).arg(layout).arg(rate / 1000.0, 0, 'g', 3);
         }
     } else {
         result.audioInfo = QStringLiteral("none");
@@ -709,14 +764,55 @@ VideoExportResult VideoExporter::exportFolder(const QString& slidesDir,
             return 0;
         };
 
+        // Output sample position (encoder rate) where the next converted sample goes
+        int64_t queuedEnd = -1;
+
+        auto queueSilence = [&](int64_t count) -> int {
+            const int chunk = aenc->sample_rate; // 1 s at a time
+            while (count > 0) {
+                const int n = int(std::min<int64_t>(count, chunk));
+                std::vector<uint8_t*> planes(size_t(aenc->ch_layout.nb_channels), nullptr);
+                int r = av_samples_alloc(planes.data(), nullptr, aenc->ch_layout.nb_channels, n, aenc->sample_fmt, 0);
+                if (r < 0) return r;
+                av_samples_set_silence(planes.data(), 0, n, aenc->ch_layout.nb_channels, aenc->sample_fmt);
+                av_audio_fifo_write(fifo.get(), reinterpret_cast<void**>(planes.data()), n);
+                av_freep(&planes[0]);
+                queuedEnd += n;
+                count -= n;
+                if ((r = encodeFromFifo(false)) < 0) return r;
+            }
+            return 0;
+        };
+
         auto convertAndQueue = [&](const AVFrame* src) -> int {
+            const int rate = aenc->sample_rate;
+            const int64_t ts = src && src->best_effort_timestamp != AV_NOPTS_VALUE ? src->best_effort_timestamp
+                                                                                   : AV_NOPTS_VALUE;
             if (nextAudioPts < 0) {
                 // First samples: place them at their source time
-                const int64_t ts = src && src->best_effort_timestamp != AV_NOPTS_VALUE ? src->best_effort_timestamp
-                                                                                       : originInTb;
-                const double startSec = std::max(0.0, (ts - originInTb) * av_q2d(inTb));
-                nextAudioPts = std::llround(startSec * aenc->sample_rate);
+                const double startSec = std::max(0.0, ((ts != AV_NOPTS_VALUE ? ts : originInTb) - originInTb)
+                                                          * av_q2d(inTb));
+                nextAudioPts = std::llround(startSec * rate);
+                queuedEnd = nextAudioPts;
             }
+
+            // Follow the source timestamps, as players and the slide timeline do.
+            // Recorders drop audio and stretch timestamps to the wall clock (a
+            // 99-min lecture: 3.1 s over ~150 holes); counting samples back to
+            // back would let the voice run ahead of the slides. Fill holes with
+            // silence and drop overlaps, beyond a 10 ms tolerance.
+            int64_t dropSamples = 0;
+            if (ts != AV_NOPTS_VALUE) {
+                const int64_t expected = std::llround((ts - originInTb) * av_q2d(inTb) * rate);
+                const int64_t diff = expected - (queuedEnd + swr_get_delay(swr.get(), rate));
+                const int64_t tolerance = rate / 100;
+                if (diff > tolerance) {
+                    if (int r = queueSilence(diff); r < 0) return r;
+                } else if (diff < -tolerance) {
+                    dropSamples = -diff;
+                }
+            }
+
             const int maxOut = swr_get_out_samples(swr.get(), src ? src->nb_samples : 0);
             if (maxOut <= 0) return 0;
             std::vector<uint8_t*> planes(size_t(aenc->ch_layout.nb_channels), nullptr);
@@ -725,8 +821,17 @@ VideoExportResult VideoExporter::exportFolder(const QString& slidesDir,
             const int got = swr_convert(swr.get(), planes.data(), maxOut,
                                         src ? const_cast<const uint8_t**>(src->extended_data) : nullptr,
                                         src ? src->nb_samples : 0);
-            if (got > 0) {
-                av_audio_fifo_write(fifo.get(), reinterpret_cast<void**>(planes.data()), got);
+            const int skip = int(std::min<int64_t>(dropSamples, std::max(got, 0)));
+            if (got - skip > 0) {
+                std::vector<uint8_t*> from(planes);
+                const int bytesPerSample = av_get_bytes_per_sample(aenc->sample_fmt);
+                if (av_sample_fmt_is_planar(aenc->sample_fmt)) {
+                    for (uint8_t*& p : from) p += size_t(skip) * bytesPerSample;
+                } else {
+                    from[0] += size_t(skip) * bytesPerSample * aenc->ch_layout.nb_channels;
+                }
+                av_audio_fifo_write(fifo.get(), reinterpret_cast<void**>(from.data()), got - skip);
+                queuedEnd += got - skip;
             }
             av_freep(&planes[0]);
             return got < 0 ? got : 0;

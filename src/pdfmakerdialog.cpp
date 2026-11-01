@@ -23,6 +23,7 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFrame>
+#include <QStandardItemModel>
 
 PdfMakerDialog::PdfMakerDialog(const QString& baseOutputDir,
                                QWidget *parent)
@@ -169,9 +170,20 @@ QWidget* PdfMakerDialog::createVideoPage()
         "after a seek; repeats keep them close. Off = one frame per slide change (smallest).");
     videoRow->addStretch();
     m_audioModeComboBox = addCombo(videoRow, "Audio:", nullptr,
-        {{"Copy original", "copy"}, {"Compress (AAC)", "compress"}},
-        "Used for folders with an audio source. Copy keeps the original track unchanged; "
-        "Compress re-encodes it to AAC with the settings below.");
+        {{"Copy original", "copy"}, {"Compress (AAC)", "aac"}, {"Compress (Opus)", "opus"}},
+        "Used for folders with an audio source. Copy keeps the original track unchanged. "
+        "AAC plays everywhere. Opus is about a third of the size for the same speech "
+        "quality, but Apple's QuickTime Player and Photos may not play it (VLC, IINA, "
+        "browsers, Windows and Android do).");
+    if (!VideoExporter::isOpusAvailable()) {
+        const int i = m_audioModeComboBox->findData("opus");
+        if (auto* model = qobject_cast<QStandardItemModel*>(m_audioModeComboBox->model())) {
+            if (QStandardItem* item = model->item(i)) {
+                item->setEnabled(false);
+                item->setToolTip("This build has no Opus encoder");
+            }
+        }
+    }
     layout->addLayout(videoRow);
 
     QFrame* separator = new QFrame(page);
@@ -179,18 +191,18 @@ QWidget* PdfMakerDialog::createVideoPage()
     separator->setFrameShadow(QFrame::Sunken);
     layout->addWidget(separator);
 
-    // Second row: AAC settings, equal width across the whole line
+    // Second row: compression settings, equal width across the whole line
     QHBoxLayout* audioRow = new QHBoxLayout();
-    m_audioBitrateComboBox = addCombo(audioRow, "Bitrate:", &m_audioBitrateLabel,
-        {{"24 kbps", 24}, {"32 kbps", 32}, {"48 kbps", 48}, {"64 kbps", 64},
-         {"96 kbps", 96}, {"128 kbps", 128}},
-        "AAC bitrate. 32–48 kbps mono is plenty for speech.", 1);
+    m_audioBitrateComboBox = addCombo(audioRow, "Bitrate:", &m_audioBitrateLabel, {},
+        "Audio bitrate; this decides most of the file size. For mono speech, "
+        "AAC: 32–48 kbps; Opus: 12–16 kbps.", 1);
     m_audioChannelsComboBox = addCombo(audioRow, "Channels:", &m_audioChannelsLabel,
         {{"Mono", 1}, {"Stereo", 2}}, "Mono halves the bitrate needed for the same quality.", 1);
     m_audioSampleRateComboBox = addCombo(audioRow, "Sample Rate:", &m_audioSampleRateLabel,
         {{"Original", 0}, {"48 kHz", 48000}, {"44.1 kHz", 44100}, {"32 kHz", 32000},
          {"24 kHz", 24000}, {"16 kHz", 16000}},
-        "Original keeps the source rate (at most 48 kHz). Lower rates suit low bitrates.", 1);
+        "AAC only. Original keeps the source rate (at most 48 kHz). Lower rates suit low "
+        "bitrates. Opus always runs at 48 kHz and picks its own bandwidth.", 1);
     layout->addLayout(audioRow);
 
     m_videoTable = new QTableWidget(page);
@@ -893,7 +905,9 @@ void PdfMakerDialog::applyVideoOptionsToUi(const VideoExportOptions& o)
     select(m_videoQualityComboBox, o.crf, 1);
     select(m_videoRepeatComboBox, o.repeatSeconds, 3);
     select(m_audioModeComboBox, VideoExportOptions::audioModeToString(o.audioMode), 1);
-    select(m_audioBitrateComboBox, o.audioBitrateKbps, 2);
+    populateBitrates(o.audioMode == VideoExportOptions::AudioMode::Opus ? VideoExportOptions::AudioMode::Opus
+                                                                        : VideoExportOptions::AudioMode::Aac,
+                     o.audioBitrateKbps);
     select(m_audioChannelsComboBox, o.audioChannels, 0);
     select(m_audioSampleRateComboBox, o.audioSampleRate, 0);
     m_loadingVideoOptions = false;
@@ -907,21 +921,44 @@ VideoExportOptions PdfMakerDialog::videoOptionsFromUi() const
     o.crf = m_videoQualityComboBox->currentData().toInt();
     o.repeatSeconds = m_videoRepeatComboBox->currentData().toInt();
     o.audioMode = VideoExportOptions::audioModeFromString(m_audioModeComboBox->currentData().toString(),
-                                                          VideoExportOptions::AudioMode::Compress);
+                                                          VideoExportOptions::AudioMode::Aac);
     o.audioBitrateKbps = m_audioBitrateComboBox->currentData().toInt();
     o.audioChannels = m_audioChannelsComboBox->currentData().toInt();
     o.audioSampleRate = m_audioSampleRateComboBox->currentData().toInt();
     return o;
 }
 
+void PdfMakerDialog::populateBitrates(VideoExportOptions::AudioMode codec, int selectKbps)
+{
+    QSignalBlocker block(m_audioBitrateComboBox);
+    m_audioBitrateComboBox->clear();
+    for (int kbps : VideoExportOptions::bitrateChoices(codec)) {
+        m_audioBitrateComboBox->addItem(QString("%1 kbps").arg(kbps), kbps);
+    }
+    int i = m_audioBitrateComboBox->findData(selectKbps);
+    if (i < 0) {
+        i = m_audioBitrateComboBox->findData(VideoExportOptions::defaultBitrateKbps(codec));
+    }
+    m_audioBitrateComboBox->setCurrentIndex(std::max(0, i));
+    m_bitrateCodec = VideoExportOptions::audioModeToString(codec);
+}
+
 void PdfMakerDialog::updateAudioControls()
 {
-    const bool compress = m_audioModeComboBox->currentData().toString() == "compress";
+    const QString mode = m_audioModeComboBox->currentData().toString();
+    const bool compress = mode == "aac" || mode == "opus";
+    // Switching codec offers that codec's bitrates, starting at its default
+    if (compress && mode != m_bitrateCodec) {
+        const auto codec = VideoExportOptions::audioModeFromString(mode, VideoExportOptions::AudioMode::Aac);
+        populateBitrates(codec, VideoExportOptions::defaultBitrateKbps(codec));
+    }
     for (QWidget* w : std::initializer_list<QWidget*>{
-             m_audioBitrateLabel, m_audioBitrateComboBox, m_audioChannelsLabel,
-             m_audioChannelsComboBox, m_audioSampleRateLabel, m_audioSampleRateComboBox}) {
+             m_audioBitrateLabel, m_audioBitrateComboBox, m_audioChannelsLabel, m_audioChannelsComboBox}) {
         w->setEnabled(compress);
     }
+    const bool sampleRate = mode == "aac";
+    m_audioSampleRateLabel->setEnabled(sampleRate);
+    m_audioSampleRateComboBox->setEnabled(sampleRate);
 }
 
 void PdfMakerDialog::onVideoSettingChanged()

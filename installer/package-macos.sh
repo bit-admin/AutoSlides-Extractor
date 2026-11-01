@@ -476,6 +476,8 @@ otool -L "${avcodec[1]}" | grep -q 'VideoToolbox.framework' \
   || die "bundled FFmpeg was built without VideoToolbox (no hardware decoding)"
 otool -L "${avcodec[1]}" | grep -q 'libx264' \
   || die "bundled FFmpeg was built without libx264 (no video export)"
+otool -L "${avcodec[1]}" | grep -q 'libopus' \
+  || die "bundled FFmpeg was built without libopus (no Opus audio in video export)"
 onnx=("$FRAMEWORKS_DIR"/libonnxruntime*.dylib(.N))
 (( ${#onnx[@]} )) || die "ONNX Runtime not bundled (ML classification would be unavailable)"
 log "OK: no missing or external dylibs; VideoToolbox + ONNX Runtime present"
