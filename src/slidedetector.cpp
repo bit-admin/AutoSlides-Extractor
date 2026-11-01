@@ -14,16 +14,23 @@ namespace {
  * last of those (content has settled). A new change during verification
  * restarts it at the new frame.
  *
+ * A confirmed candidate that looks the same as the last saved slide is not
+ * saved again. This happens when the presenter steps forward for a moment and
+ * comes back (A, B, A, A, A): B is too short to be confirmed, and the A that
+ * follows it would otherwise be saved as a second copy of A.
+ *
  * All state lives in ProcessingState, so a chunk boundary is invisible to the
  * algorithm.
  *
- * @param pts  pts(localFrame) -> media seconds
- * @param save save(localFrame, changeAt)
+ * @param pts          pts(localFrame) -> media seconds
+ * @param save         save(localFrame, changeAt)
+ * @param sameAsSaved  sameAsSaved(localFrame) -> true if the frame matches the
+ *                     last saved slide
  */
-template <typename PtsFn, typename SaveFn>
+template <typename PtsFn, typename SaveFn, typename SameFn>
 void runDetection(const std::vector<double>& scores, ProcessingState& state,
                   double ssimThreshold, int verificationCount,
-                  PtsFn pts, SaveFn save)
+                  PtsFn pts, SaveFn save, SameFn sameAsSaved)
 {
     for (size_t k = 0; k < scores.size(); ++k) {
         const int frame = static_cast<int>(k) + 1;
@@ -40,7 +47,9 @@ void runDetection(const std::vector<double>& scores, ProcessingState& state,
         }
 
         if (state.verifyRemaining == 0) {
-            save(frame, state.pendingChangeAt);
+            if (!sameAsSaved(frame)) {
+                save(frame, state.pendingChangeAt);
+            }
             state.candidateFrameCount = 0;
         }
     }
@@ -68,22 +77,15 @@ SlideDetectionResult SlideDetector::detectSlides(const std::vector<std::string>&
                                                double ssimThreshold,
                                                int verificationCount)
 {
-    SlideDetectionResult result;
-    QElapsedTimer timer;
-    timer.start();
-
-    if (framePaths.empty()) {
-        return result;
+    std::vector<cv::Mat> frames;
+    frames.reserve(framePaths.size());
+    for (const std::string& path : framePaths) {
+        frames.push_back(cv::imread(path));
     }
-
-    result.ssimScores = calculateSSIMScores(framePaths);
-    for (int index : extractSlidesFromCount(static_cast<int>(framePaths.size()), result.ssimScores,
-                                            ssimThreshold, verificationCount)) {
-        result.selectedSlides.push_back(framePaths[index]);
+    SlideDetectionResult result = detectSlidesFromFrames(frames, ssimThreshold, verificationCount);
+    for (int index : result.selectedSlideIndices) {
+        result.selectedSlides.push_back(framePaths[static_cast<size_t>(index)]);
     }
-
-    result.totalFramesProcessed = static_cast<int>(framePaths.size());
-    result.processingTimeSeconds = timer.elapsed() / 1000.0;
     return result;
 }
 
@@ -101,23 +103,14 @@ SlideDetectionResult SlideDetector::detectSlidesFromFramesWithConfig(const std::
                                                                    int downsampleWidth,
                                                                    int downsampleHeight)
 {
-    SlideDetectionResult result;
-    QElapsedTimer timer;
-    timer.start();
-
-    if (frames.empty()) {
-        return result;
+    // One chunk holding every frame; timestamps are frame indices.
+    ProcessingState state;
+    std::vector<double> timestamps(frames.size());
+    for (size_t i = 0; i < frames.size(); ++i) {
+        timestamps[i] = static_cast<double>(i);
     }
-
-    result.ssimScores = calculateSSIMScoresFromFrames(frames, enableDownsampling, downsampleWidth, downsampleHeight);
-    result.selectedSlideIndices = extractSlidesFromCount(static_cast<int>(frames.size()),
-                                                       result.ssimScores,
-                                                       ssimThreshold,
-                                                       verificationCount);
-
-    result.totalFramesProcessed = static_cast<int>(frames.size());
-    result.processingTimeSeconds = timer.elapsed() / 1000.0;
-    return result;
+    return detectSlidesFromChunk(frames, timestamps, state, true, ssimThreshold, verificationCount,
+                                 enableDownsampling, downsampleWidth, downsampleHeight);
 }
 
 SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::Mat>& newFrames,
@@ -168,8 +161,14 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
         const int globalIndex = state.globalFrameOffset + (w - base);
         state.savedSlideIndices.push_back(globalIndex);
         state.lastStableIndex = globalIndex;
+        state.lastSavedPrepared = *working[static_cast<size_t>(w)];
         result.selectedSlideIndices.push_back(globalIndex);
         result.confirmedSlideTimings.push_back(ConfirmedSlideTiming{globalIndex, changeAt, pts(w)});
+    };
+    auto sameAsSaved = [&](int w) {
+        return !state.lastSavedPrepared.empty() &&
+               SSIMCalculator::globalSSIMFromGray(*working[static_cast<size_t>(w)],
+                                                  state.lastSavedPrepared) >= ssimThreshold;
     };
 
     // The very first frame of the video is always a slide
@@ -177,10 +176,12 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
         save(0, pts(0));
     }
 
-    runDetection(result.ssimScores, state, ssimThreshold, verificationCount, pts, save);
+    runDetection(result.ssimScores, state, ssimThreshold, verificationCount, pts, save, sameAsSaved);
 
     if (isLastChunk && shouldSaveTrailingCandidate(state)) {
-        save(base + n - 1, state.pendingChangeAt);
+        if (!sameAsSaved(base + n - 1)) {
+            save(base + n - 1, state.pendingChangeAt);
+        }
         state.verifyRemaining = 0;
         state.candidateFrameCount = 0;
     }
@@ -193,28 +194,6 @@ SlideDetectionResult SlideDetector::detectSlidesFromChunk(const std::vector<cv::
     result.totalFramesProcessed = n;
     result.processingTimeSeconds = timer.elapsed() / 1000.0;
     return result;
-}
-
-std::vector<int> SlideDetector::extractSlidesFromCount(int frameCount,
-                                                     const std::vector<double>& scores,
-                                                     double ssimThreshold,
-                                                     int verificationCount)
-{
-    std::vector<int> saved;
-    if (frameCount <= 0) {
-        return saved;
-    }
-
-    ProcessingState state;
-    auto pts = [](int frame) { return static_cast<double>(frame); };
-    auto save = [&](int frame, double) { saved.push_back(frame); };
-
-    save(0, 0.0);
-    runDetection(scores, state, ssimThreshold, std::max(1, verificationCount), pts, save);
-    if (shouldSaveTrailingCandidate(state)) {
-        save(frameCount - 1, 0.0);
-    }
-    return saved;
 }
 
 std::vector<cv::Mat> SlideDetector::prepareFrames(const std::vector<cv::Mat>& frames,

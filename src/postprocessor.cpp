@@ -4,9 +4,12 @@
 #include "mlclassifier.h"
 #include "autocropdetector.h"
 #include "cropmanager.h"
+#include "imageiohelper.h"
+#include "ssimcalculator.h"
 #include <QDir>
 #include <QFileInfo>
 #include <QSet>
+#include <QHash>
 #include <QDebug>
 #include <memory>
 
@@ -34,7 +37,8 @@ PostProcessingResult PostProcessor::processDirectory(const QString& imageDir,
                                                     bool mlAutoCropMaybeSlides,
                                                     bool mlPostCropDedup,
                                                     const AutoCropConfig& autoCropConfig,
-                                                    int jpegQuality)
+                                                    int jpegQuality,
+                                                    const DuplicateSSIMCheck& duplicateCheck)
 {
     m_movedToTrash.clear();
     m_totalProcessed = 0;
@@ -65,7 +69,7 @@ PostProcessingResult PostProcessor::processDirectory(const QString& imageDir,
 
     // Remove duplicates if enabled
     if (deleteRedundant) {
-        QStringList duplicates = removeDuplicates(imageHashes, hammingThreshold,
+        QStringList duplicates = removeDuplicates(imageHashes, hammingThreshold, duplicateCheck,
                                                   useApplicationTrash, baseOutputDir);
         m_movedToTrash.append(duplicates);
         result.removedByPHash += duplicates.size();
@@ -153,11 +157,26 @@ QMap<QString, std::vector<uint8_t>> PostProcessor::calculateHashes(const QString
 
 QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint8_t>>& imageHashes,
                                            int hammingThreshold,
+                                           const DuplicateSSIMCheck& duplicateCheck,
                                            bool useApplicationTrash,
                                            const QString& baseOutputDir)
 {
     QStringList movedFiles;
     QStringList processedFiles = imageHashes.keys();
+
+    // Downsampled grayscale images for the SSIM check, loaded on first use
+    // (only images with a pHash match are ever loaded).
+    QHash<QString, cv::Mat> prepared;
+    auto preparedImage = [&](const QString& path) -> cv::Mat {
+        auto it = prepared.find(path);
+        if (it == prepared.end()) {
+            cv::Mat image = ImageIOHelper::imreadUnicode(path, cv::IMREAD_COLOR);
+            it = prepared.insert(path, SSIMCalculator::prepareForSSIM(
+                image, duplicateCheck.enableDownsampling,
+                duplicateCheck.downsampleWidth, duplicateCheck.downsampleHeight));
+        }
+        return it.value();
+    };
 
     // Compare each image with subsequent images
     for (int i = 0; i < processedFiles.size(); i++) {
@@ -184,6 +203,18 @@ QStringList PostProcessor::removeDuplicates(const QMap<QString, std::vector<uint
             int distance = PHashCalculator::hammingDistance(hash1, hash2);
 
             if (distance >= 0 && distance <= hammingThreshold) {
+                if (duplicateCheck.ssimThreshold > 0.0) {
+                    const cv::Mat a = preparedImage(file1);
+                    const cv::Mat b = preparedImage(file2);
+                    const double ssim = SSIMCalculator::globalSSIMFromGray(a, b);
+                    if (!a.empty() && !b.empty() && ssim < duplicateCheck.ssimThreshold) {
+                        qInfo() << "PostProcessor: kept" << QFileInfo(file2).fileName()
+                                << "- pHash distance" << distance << "to" << QFileInfo(file1).fileName()
+                                << "but SSIM" << ssim << "<" << duplicateCheck.ssimThreshold;
+                        continue;
+                    }
+                }
+
                 // Images are similar - move to trash
                 bool success = false;
                 if (useApplicationTrash) {

@@ -19,6 +19,8 @@ struct ProcessingState {
     // Global indices of all saved slides, in increasing order
     std::vector<int> savedSlideIndices;
     int lastStableIndex = -1;               // Global index of the last saved slide
+    cv::Mat lastSavedPrepared;              // That slide, downsampled + grayscale; a confirmed
+                                            // candidate matching it is not saved again
 
     // Last frame of the previous chunk, already downsampled + grayscale
     // (only used to score the pair that straddles the chunk boundary).
