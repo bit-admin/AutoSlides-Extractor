@@ -1,0 +1,44 @@
+<!doctype html>
+<!--
+  DMG window background (640x480 points). The Finder draws the two icons on top:
+  "AutoSlides Extractor.app" centred at (160, 262), "Applications" at (480, 262)
+  (see dmg-settings.py). Rendered to background.png (1x) and background@2x.png
+  (2x) with installer/dmg/render-background.js; package-macos.sh combines them
+  into one Retina-aware TIFF.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 640px; height: 480px; overflow: hidden; position: relative;
+    background: #ffffff; color: #000000;
+    font-family: FreeSans, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  .title {
+    position: absolute; left: 38px; top: 16px; width: 580px;
+    font-size: 23px; line-height: 31px; letter-spacing: -0.1px;
+  }
+  .command {
+    position: absolute; left: 38px; top: 108px; width: 580px;
+    font-family: FreeMono, Courier, "Courier New", monospace;
+    font-size: 17.5px; line-height: 23px; color: #ea3323;
+  }
+  .arrow { position: absolute; left: 263px; top: 236px; }
+  .copyright {
+    position: absolute; left: 0; right: 0; top: 400px; text-align: center;
+    font-size: 13px; color: #1d1d1f;
+  }
+</style>
+</head>
+<body>
+  <div class="title">Drag AutoSlides Extractor to the Applications folder<br>and <b>run this command</b> in the Terminal:</div>
+  <div class="command">sudo xattr -d com.apple.quarantine /Applications/<br>AutoSlides\ Extractor.app</div>
+  <svg class="arrow" width="80" height="50" viewBox="0 0 80 50" aria-hidden="true">
+    <rect x="0" y="20" width="52" height="10" fill="#1d1d1f"/>
+    <polygon points="48,2 78,25 48,48" fill="#1d1d1f"/>
+  </svg>
+  <div class="copyright">Copyright © 2025 bit-admin. All rights reserved.</div>
+</body>
+</html>

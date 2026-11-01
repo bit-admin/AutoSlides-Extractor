@@ -118,8 +118,13 @@ jobs:
           # No compiler version in the key: vcpkg's own ABI hashes decide what
           # is reusable, and one entry can hold packages for several runner images.
           key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
+          # Same manifest first; else any entry for this vcpkg + triplet, so a
+          # vcpkg.json change rebuilds only what changed (vcpkg's ABI hashes decide
+          # what is reusable; the prune step drops what stays unused). To force a
+          # cold build, rename the vcpkg-bin prefix in the key and restore-keys.
           restore-keys: |
             vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-
+            vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Setup vcpkg (pinned)
         run: |
@@ -241,6 +246,14 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
+      # dmgbuild writes the DMG window layout (background, icon positions) without
+      # driving Finder; installed in a venv so it cannot touch the build.
+      - name: Install dmgbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check dmgbuild==1.6.5
+          echo "DMGBUILD=$RUNNER_TEMP/dmgbuild/bin/dmgbuild" >> "$GITHUB_ENV"
+
       - name: Package app + DMG
         run: |
           QT_PATH="$QT_ROOT_DIR" \
@@ -263,6 +276,8 @@ jobs:
           app="$mnt/AutoSlides Extractor.app"
           exe="$app/Contents/MacOS/AutoSlidesExtractor"
           [ -L "$mnt/Applications" ] || { echo "::error::/Applications link missing in DMG"; exit 1; }
+          [ -f "$mnt/.DS_Store" ] && [ -f "$mnt/.background.tiff" ] \
+            || { echo "::error::DMG window layout (.DS_Store / .background.tiff) missing"; exit 1; }
           [ ! -e "$mnt/install.command" ] || { echo "::error::install.command should not ship"; exit 1; }
           codesign --verify --deep --strict --verbose=1 "$app"
           /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist"

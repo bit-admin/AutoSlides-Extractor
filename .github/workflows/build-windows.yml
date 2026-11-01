@@ -137,8 +137,13 @@ jobs:
           # never be re-saved (run 49: restored, 0 packages reused, save refused).
           # One entry can hold packages for several runner images.
           key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-g4-${{ github.run_id }}
+          # Same manifest first; else any entry for this vcpkg + triplet, so a
+          # vcpkg.json change rebuilds only what changed (vcpkg's ABI hashes decide
+          # what is reusable; the prune step drops what stays unused). To force a
+          # cold build, rename the vcpkg-bin prefix in the key and restore-keys.
           restore-keys: |
             vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-g4-
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Restore vcpkg tool (pinned)
         id: restore-vcpkg-tool
