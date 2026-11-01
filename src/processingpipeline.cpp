@@ -21,6 +21,14 @@ PostProcessingResult ProcessingPipeline::runPostProcessing(const Request& reques
     connect(&processor, &PostProcessor::mlClassificationFailed,
             this, &ProcessingPipeline::mlClassificationFailed);
 
+    // A pHash duplicate must also be the same slide by the detector's SSIM test.
+    DuplicateSSIMCheck duplicateCheck;
+    duplicateCheck.ssimThreshold = ConfigManager::getSSIMThreshold(config.ssimPreset,
+                                                                   config.customSSIMThreshold);
+    duplicateCheck.enableDownsampling = config.enableDownsampling;
+    duplicateCheck.downsampleWidth = config.downsampleWidth;
+    duplicateCheck.downsampleHeight = config.downsampleHeight;
+
     // The single place the processDirectory call is assembled from Request + AppConfig.
     return processor.processDirectory(
         request.imageDir,
@@ -42,5 +50,6 @@ PostProcessingResult ProcessingPipeline::runPostProcessing(const Request& reques
         config.mlAutoCropMaybeSlides,
         config.mlPostCropDedup,
         config.autoCrop,
-        config.jpegQuality);
+        config.jpegQuality,
+        duplicateCheck);
 }

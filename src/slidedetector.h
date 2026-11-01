@@ -59,7 +59,8 @@ public:
                                               int verificationCount = 3);
 
     /**
-     * Detect slides from in-memory frames using the two-stage algorithm with configurable downsampling
+     * Detect slides from in-memory frames using the two-stage algorithm with configurable downsampling.
+     * Same as feeding all frames to detectSlidesFromChunk as one (last) chunk.
      * @param frames Vector of OpenCV Mat frames in chronological order
      * @param ssimThreshold SSIM threshold for similarity detection
      * @param verificationCount Number of consecutive frames needed for stability verification
@@ -134,15 +135,6 @@ signals:
     void detectionError(const QString& error);
 
 private:
-    /**
-     * Single-pass detection over a full score sequence (frame i vs i+1).
-     * Uses the same state machine as detectSlidesFromChunk.
-     */
-    std::vector<int> extractSlidesFromCount(int frameCount,
-                                          const std::vector<double>& scores,
-                                          double ssimThreshold,
-                                          int verificationCount);
-
     /** Downsample + grayscale every frame once (in parallel). */
     static std::vector<cv::Mat> prepareFrames(const std::vector<cv::Mat>& frames,
                                               bool enableDownsampling,
