@@ -250,8 +250,12 @@ jobs:
       # driving Finder; installed in a venv so it cannot touch the build.
       - name: Install dmgbuild
         run: |
+          # 1.6.7+: older versions write a background bookmark that makes Finder on
+          # macOS 26.2+ show no background. Needs Python 3.10+.
+          python3 -c 'import sys; assert sys.version_info >= (3, 10), sys.version' \
+            || { echo "::error::dmgbuild needs Python 3.10+, found $(python3 --version)"; exit 1; }
           python3 -m venv "$RUNNER_TEMP/dmgbuild"
-          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check dmgbuild==1.6.5
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check dmgbuild==1.6.7
           echo "DMGBUILD=$RUNNER_TEMP/dmgbuild/bin/dmgbuild" >> "$GITHUB_ENV"
 
       - name: Package app + DMG
@@ -278,6 +282,9 @@ jobs:
           [ -L "$mnt/Applications" ] || { echo "::error::/Applications link missing in DMG"; exit 1; }
           [ -f "$mnt/.DS_Store" ] && [ -f "$mnt/.background.tiff" ] \
             || { echo "::error::DMG window layout (.DS_Store / .background.tiff) missing"; exit 1; }
+          # A background bookmark (pBBk) makes Finder on macOS 26.2+ show no background
+          ! grep -q pBBk "$mnt/.DS_Store" \
+            || { echo "::error::.DS_Store has a pBBk background bookmark (dmgbuild < 1.6.7?)"; exit 1; }
           [ ! -e "$mnt/install.command" ] || { echo "::error::install.command should not ship"; exit 1; }
           codesign --verify --deep --strict --verbose=1 "$app"
           /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist"
