@@ -170,6 +170,10 @@ mkdir -p "$DIST_DIR"
 cp -R "$SRC_APP" "$STAGE_APP"
 mkdir -p "$CONTENTS/Resources" "$FRAMEWORKS_DIR"
 cp -f "$ROOT/resources/icon.icns" "$CONTENTS/Resources/icon.icns"
+# Licence notice + GPL text (the bundled FFmpeg includes GPL x264)
+mkdir -p "$CONTENTS/Resources/licenses"
+cp -f "$ROOT/licenses/NOTICE.txt" "$ROOT/licenses/GPL-3.0.txt" "$CONTENTS/Resources/licenses/"
+cp -f "$ROOT/LICENSE" "$CONTENTS/Resources/licenses/LICENSE-MIT.txt"
 
 # ---------------------------------------------------------------------------
 # 2. macdeployqt
@@ -470,6 +474,8 @@ avcodec=("$FRAMEWORKS_DIR"/libavcodec*.dylib(.N))
 (( ${#avcodec[@]} )) || die "libavcodec not bundled"
 otool -L "${avcodec[1]}" | grep -q 'VideoToolbox.framework' \
   || die "bundled FFmpeg was built without VideoToolbox (no hardware decoding)"
+otool -L "${avcodec[1]}" | grep -q 'libx264' \
+  || die "bundled FFmpeg was built without libx264 (no video export)"
 onnx=("$FRAMEWORKS_DIR"/libonnxruntime*.dylib(.N))
 (( ${#onnx[@]} )) || die "ONNX Runtime not bundled (ML classification would be unavailable)"
 log "OK: no missing or external dylibs; VideoToolbox + ONNX Runtime present"

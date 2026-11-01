@@ -43,6 +43,7 @@ private:
     bool parseExclusionHashes(const QString& csv, QString* errorOut);
     int runProcessingStage(QString* outSlidesDir, int* outSlideCount);
     int runPostProcessingStage(const QString& slidesDir);
+    int runVideoExportStage(const QString& slidesDir);
 
     void writeStdout(const QString& line);
     void writeStderr(const QString& line);
@@ -67,6 +68,8 @@ private:
     bool m_phashExclusion;
     bool m_mlClassify;
     bool m_exclusionListOverridden;
+    bool m_exportVideo = false;
+    QString m_videoAudioMode;     // empty = saved Slides Export setting
     QList<ExclusionEntry> m_exclusionList;
 
     int m_processingResultCode;

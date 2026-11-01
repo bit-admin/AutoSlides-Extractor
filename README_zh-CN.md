@@ -108,6 +108,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 - 支持自然排序和自定义顺序。
 - 支持一个合并 PDF 或每个文件夹一个 PDF。
 - 减小文件大小时可控制宽高比、缩放尺寸和 JPEG 质量。
+- 视频模式可按时间线把文件夹重建为小体积 MP4，可复制或压缩原音轨，每张幻灯片一个章节。
 
 ### 性能
 
@@ -540,7 +541,7 @@ Baseline Crop 适合整节课都带有相同窗口边框或黑边的情况。
   <img src="docs/slides-export.png" alt="Slides Export PDF 工作流" width="90%" />
 </p>
 
-Slides Export 用于从幻灯片文件夹生成 PDF。
+Slides Export 用于从幻灯片文件夹生成 PDF 或视频。使用顶部的 **PDF** / **Video** 切换。
 
 ### 工作流
 
@@ -586,6 +587,38 @@ Slides Export 用于从幻灯片文件夹生成 PDF。
 | 最佳质量 | 原始尺寸或 1080p，JPEG 85-95。 |
 | 课堂讲义 | 720p，JPEG 70-85。 |
 | 极小文件 | 480p，JPEG 50-70，并确认文字可读。 |
+
+### 视频模式
+
+在 Slides Export 顶部切换到 **Video**，即可把每个所选文件夹按其 `timeline.json` 生成一个小体积 MP4。生成的视频与原录屏时间一致，只是画面换成提取出的幻灯片图片，仍然可以听讲课声音。
+
+1. 点击 Slides Export 顶部的 **Video**。
+2. 选择一个或多个文件夹。没有 `timeline.json` 的文件夹会显示为灰色，需开启时间线后重新提取。
+3. 检查 **Audio Source** 列。若时间线记录了原视频且文件仍存在，会自动填入。点击 **Choose...** 选择原视频或任意音频文件，点击 **Clear** 则导出无声视频。
+4. 选择视频和音频设置。
+5. 点击 **Make Video**。只选一个文件夹时选择文件名；选择多个文件夹时选择输出文件夹，每个文件夹生成一个 MP4。
+
+各时间段显示的内容：
+
+| 时间线状态 | 画面 |
+| --- | --- |
+| 保留的幻灯片 | 从该幻灯片的切换时间显示到下一次切换。 |
+| 重复（老师切回之前的幻灯片） | 显示之前保留的那一张。 |
+| 已移除（ML 判定非幻灯片、排除列表、手动删除） | 继续显示上一张幻灯片。 |
+
+设置：
+
+| 设置 | 选项 | 说明 |
+| --- | --- | --- |
+| Resolution | Original、1080p、720p、480p | 不会放大幻灯片；宽高比不同的图片会加黑边。 |
+| Quality | High (CRF 18)、Standard (CRF 23)、Small (CRF 28) | H.264 画质。90 分钟课程的画面部分约 1 MB。 |
+| Repeat Frame | Off、30 s、1 min、2 min、5 min、10 min | 按此间隔重复当前幻灯片。部分播放器跳转后会显示下一帧，重复帧可让误差保持在该间隔内。Off 表示每次切换只有一帧。 |
+| Audio | Copy original、Compress (AAC) | Copy 原样保留音轨；Compress 按下方设置重新编码。无法放入 MP4 的音频会自动重新编码。 |
+| Bitrate / Channels / Sample Rate | 24–128 kbps、Mono/Stereo、Original–16 kHz | 仅用于 Compress。语音用 32–48 kbps 单声道足够。 |
+
+每张幻灯片对应一个章节，名称为其 PDF 页码（**Slide 3** 即 PDF 第 3 页），支持章节的播放器可以直接跳到某张幻灯片。
+
+示例：99 分钟 1080p 录屏（249 MB）在 48 kbps 单声道音频下约 36 MB，直接复制原音轨约 47 MB，无音频约 1 MB。文件大小主要由音频决定，幻灯片画面本身约 1 MB。
 
 ## 命令行指南
 
@@ -668,6 +701,8 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `ml_started` | ML 分类开始，并包含 execution provider。 |
 | `ml_failed` | ML 分类器初始化或运行失败。 |
 | `post_complete` | 后处理汇总。 |
+| `video_progress` | `--export-video` 进度（百分比）。 |
+| `video_exported` | `--export-video` 结果：路径、字节数、时长、帧数、章节数、音频。 |
 | `done` | 全流程成功完成。 |
 | `cancelled` | SIGINT 或 SIGTERM 取消完成。 |
 | `error` | 结构化错误，通常写入 stderr。 |
@@ -700,6 +735,8 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `--ml-autocrop-maybe` | flag | 在删除 `may_be_slide` 图片前自动裁剪，成功则保留。 |
 | `--ml-postcrop-dedup` | flag | 后处理自动裁剪后重新检测 pHash 重复项。 |
 | `--write-timeline` | flag | 在输出幻灯片文件夹中写入 `timeline.json` 媒体时间映射文件。 |
+| `--export-video` | flag | 额外生成 `<output>/<name>.mp4`：按时间线把幻灯片生成视频，并使用输入视频的音频。隐含 `--write-timeline`。分辨率、画质、重复间隔和音频压缩使用 Slides Export 中保存的设置。 |
+| `--video-audio` | mode | `--export-video` 的音频：`copy`、`compress` 或 `none`。默认使用 Slides Export 中保存的设置。 |
 | `--compatible` | flag | Electron 兼容模式（输出 PNG 幻灯片，去除 `screen_` 前缀，跳过后处理）。 |
 | `--json` | flag | 输出 JSON Lines 并关闭文本进度条。 |
 | `--help` | flag | 打印帮助。 |
@@ -716,6 +753,7 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `3` | 输入或输出路径错误。 |
 | `4` | 视频处理失败。 |
 | `5` | 后处理失败。 |
+| `6` | 视频导出失败。 |
 | `130` | 被 SIGINT 取消，通常是 Ctrl-C。 |
 | `143` | 被 SIGTERM 取消。 |
 
@@ -763,6 +801,7 @@ slides_Lecture01/slide_Lecture01_001.jpg
 
 - **事件 (Events)**：捕获事件数组，记录 I-frame PTS 媒体时间（`changeAt`、`confirmedAt`）及 `initialFile` 基本文件名。
 - **决议 (Resolutions)**：可变的决议映射表，追踪幻灯片状态（`canonical`、`duplicate`、`gap`）。后处理与人工复核会更新决议状态（如 `duplicateOf`、`exclusion`、`ai_filtered`、`manual_trash`），而不会删除捕获事件，从而为播放器和下游应用提供稳定可追溯的时间线。
+- **来源 (Source)**（可选）：幻灯片所属视频的 `source.path`、`source.duration` 和 `source.startTime`。Slides Export 的视频模式据此查找音频。
 
 ### 应用垃圾箱
 
@@ -833,7 +872,8 @@ slides_Lecture01/slide_Lecture01_001.jpg
 - C++17 编译器
 - Qt 6 Core、Widgets、Gui
 - OpenCV 4.x core、imgproc、imgcodecs
-- FFmpeg 开发库：libavcodec、libavformat、libavutil、libswscale
+- FFmpeg 开发库：libavcodec、libavformat、libavutil、libswscale、libswresample
+- 视频模式需要启用 libx264 的 FFmpeg（`vcpkg.json` 已启用）；若没有，会使用其他可用的 H.264 编码器
 
 可选：
 
@@ -1019,7 +1059,9 @@ otool -L AutoSlidesExtractor.app/Contents/MacOS/AutoSlidesExtractor | grep homeb
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE)。
+源代码使用 [MIT License](LICENSE)。
+
+发布版本捆绑了启用 libx264 的 FFmpeg（用于视频模式），libx264 是 GPL 软件，因此发布的程序按 [GNU GPL 第 3 版](licenses/GPL-3.0.txt) 分发。每个安装包都包含 `licenses` 文件夹，内有此说明、GPL 全文以及获取对应源代码的方式，详见 [licenses/NOTICE.txt](licenses/NOTICE.txt)。
 
 ---
 

@@ -1,7 +1,7 @@
 # vcpkg overlay triplet for the macOS release build (build-macos.yml).
 #
 # Same idea as x64-linux-dynamic / x64-windows: OpenCV and FFmpeg ship as
-# dylibs inside the app bundle (FFmpeg stays dynamically linked for LGPL).
+# dylibs inside the app bundle (FFmpeg with x264, GPLv3; see README "License").
 #   - arm64 only (Apple Silicon)
 #   - release only: the app is only built in Release, so skip debug builds
 #   - deployment target pinned, otherwise vcpkg builds for the runner's own

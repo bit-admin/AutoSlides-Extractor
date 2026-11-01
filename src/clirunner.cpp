@@ -1,6 +1,7 @@
 #include "clirunner.h"
 #include "processingthread.h"
 #include "videoqueue.h"
+#include "videoexporter.h"
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
@@ -30,6 +31,7 @@ constexpr int EXIT_BAD_ARGS = 2;
 constexpr int EXIT_BAD_INPUT = 3;
 constexpr int EXIT_PROCESSING_FAILED = 4;
 constexpr int EXIT_POSTPROCESSING_FAILED = 5;
+constexpr int EXIT_VIDEO_EXPORT_FAILED = 6;
 constexpr int EXIT_CANCELLED_SIGINT = 130;
 constexpr int EXIT_CANCELLED_SIGTERM = 143;
 
@@ -423,6 +425,14 @@ int CliRunner::run(const QStringList& arguments)
         }
     }
 
+    if (m_exportVideo) {
+        int videoRc = runVideoExportStage(slidesDir);
+        if (videoRc != EXIT_OK) {
+            uninstallSignalHandlers();
+            return videoRc;
+        }
+    }
+
     if (m_jsonMode) {
         QJsonObject obj;
         obj.insert(QStringLiteral("slideCount"), slideCount);
@@ -504,6 +514,15 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
                        "folder. Off by default (does not inherit GUI setting). Compatible with "
                        "--compatible."));
 
+    QCommandLineOption exportVideoOpt(QStringLiteral("export-video"),
+        QStringLiteral("After extraction (and post-processing), also write <output>/<name>.mp4: "
+                       "the slides as a video, following the timeline, with the input video's "
+                       "audio. Implies --write-timeline. Resolution, quality, repeat interval and "
+                       "audio compression come from the saved Slides Export settings."));
+    QCommandLineOption videoAudioOpt(QStringLiteral("video-audio"),
+        QStringLiteral("Audio for --export-video: copy | compress | none. "
+                       "Default: the saved Slides Export setting."), QStringLiteral("mode"));
+
     QCommandLineOption jsonOpt(QStringLiteral("json"),
         QStringLiteral("Emit NDJSON / JSON Lines events to stdout (and JSON errors to stderr) "
                        "instead of human-readable text. Suppresses the progress bar. "
@@ -539,6 +558,8 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(mlAutoCropMaybeOpt);
     parser.addOption(mlPostCropDedupOpt);
     parser.addOption(writeTimelineOpt);
+    parser.addOption(exportVideoOpt);
+    parser.addOption(videoAudioOpt);
     parser.addOption(jsonOpt);
     parser.addOption(compatibleOpt);
 
@@ -711,6 +732,23 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     }
     m_config.writeTimeline = parser.isSet(writeTimelineOpt);
 
+    m_exportVideo = parser.isSet(exportVideoOpt);
+    if (m_exportVideo) {
+        m_config.writeTimeline = true; // the video follows the timeline
+    }
+    if (parser.isSet(videoAudioOpt)) {
+        const QString mode = parser.value(videoAudioOpt).trimmed().toLower();
+        if (mode != QLatin1String("copy") && mode != QLatin1String("compress") && mode != QLatin1String("none")) {
+            *errorOut = QStringLiteral("--video-audio must be copy, compress or none");
+            return false;
+        }
+        if (!m_exportVideo) {
+            *errorOut = QStringLiteral("--video-audio requires --export-video");
+            return false;
+        }
+        m_videoAudioMode = mode;
+    }
+
     return true;
 }
 
@@ -823,6 +861,82 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
         obj.insert(QStringLiteral("count"), m_processingSlideCount);
         obj.insert(QStringLiteral("slidesDir"), item->outputDirectory);
         emitEvent(QStringLiteral("slides_extracted"), obj);
+    }
+    return EXIT_OK;
+}
+
+int CliRunner::runVideoExportStage(const QString& slidesDir)
+{
+    VideoExportOptions options = VideoExportOptions::loadSaved();
+    if (!m_videoAudioMode.isEmpty()) {
+        options.audioMode = VideoExportOptions::audioModeFromString(m_videoAudioMode, options.audioMode);
+    }
+    options.audioSourcePath = m_videoPath;
+
+    QString name = QFileInfo(slidesDir).fileName();
+    if (name.startsWith(QLatin1String("slides_"))) {
+        name = name.mid(7);
+    }
+    const QString outPath = QDir(m_outputDir).filePath(name + QStringLiteral(".mp4"));
+
+    if (!m_jsonMode) {
+        writeStdout(QStringLiteral("[video] writing ") + outPath);
+    }
+    QElapsedTimer throttle;
+    throttle.start();
+    int lastPercent = -1;
+    const VideoExportResult result = VideoExporter::exportFolder(
+        slidesDir, outPath, options, [&](double fraction) {
+            const int percent = int(fraction * 100.0);
+            if (percent != lastPercent && (throttle.elapsed() >= 250 || percent == 100)) {
+                lastPercent = percent;
+                throttle.restart();
+                if (m_jsonMode) {
+                    QJsonObject obj;
+                    obj.insert(QStringLiteral("percent"), percent);
+                    emitEvent(QStringLiteral("video_progress"), obj);
+                }
+            }
+            return true;
+        });
+
+    for (const QString& w : result.warnings) {
+        if (m_jsonMode) {
+            QJsonObject obj;
+            obj.insert(QStringLiteral("kind"), QStringLiteral("warning"));
+            obj.insert(QStringLiteral("message"), w);
+            emitEvent(QStringLiteral("info"), obj);
+        } else {
+            writeStdout(QStringLiteral("warning: ") + w);
+        }
+    }
+    if (!result.ok) {
+        const QString msg = QStringLiteral("video export failed: ") + result.error;
+        if (m_jsonMode) {
+            emitError(QStringLiteral("video_export"), msg, EXIT_VIDEO_EXPORT_FAILED);
+        } else {
+            writeStderr(QStringLiteral("error: ") + msg);
+        }
+        return EXIT_VIDEO_EXPORT_FAILED;
+    }
+
+    const qint64 bytes = QFileInfo(outPath).size();
+    if (m_jsonMode) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("path"), outPath);
+        obj.insert(QStringLiteral("bytes"), bytes);
+        obj.insert(QStringLiteral("durationSeconds"), result.durationSeconds);
+        obj.insert(QStringLiteral("frames"), result.frames);
+        obj.insert(QStringLiteral("chapters"), result.chapters);
+        obj.insert(QStringLiteral("audio"), result.audioInfo);
+        emitEvent(QStringLiteral("video_exported"), obj);
+    } else {
+        writeStdout(QString(QStringLiteral("[video] %1 (%2 MB, %3 frames, %4 chapters, audio: %5)"))
+                        .arg(outPath)
+                        .arg(bytes / 1048576.0, 0, 'f', 1)
+                        .arg(result.frames)
+                        .arg(result.chapters)
+                        .arg(result.audioInfo));
     }
     return EXIT_OK;
 }

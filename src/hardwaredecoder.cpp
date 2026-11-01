@@ -119,6 +119,9 @@ bool HardwareDecoder::openVideo(const std::string& videoPath)
     } else {
         m_videoInfo.duration = 0.0;
     }
+    m_videoInfo.startTime = m_formatContext->start_time != AV_NOPTS_VALUE
+        ? (double)m_formatContext->start_time / AV_TIME_BASE
+        : 0.0;
 
     // Calculate frame rate
     AVRational frameRate = m_formatContext->streams[m_videoStreamIndex]->r_frame_rate;
