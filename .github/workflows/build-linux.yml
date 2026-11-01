@@ -260,7 +260,8 @@ jobs:
           [ "$count" -ge 2 ] || { echo "::error::expected >= 2 slides, got $count"; exit 1; }
           [ -f out/slides_lecture/timeline.json ] || { echo "::error::timeline.json missing"; exit 1; }
 
-          # Video export: H.264 + AAC, full length, one chapter per slide.
+          # Video export: H.264 + AAC, full length, chapters for the slides left
+          # after ML (which may remove the colour-bar / solid-colour test slides).
           grep '"event":"video_exported"' events.ndjson || { echo "::error::video export missing"; exit 1; }
           ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 out/lecture.mp4 | tee streams.txt
           grep -q '^h264,video' streams.txt || { echo "::error::exported video has no H.264 track"; exit 1; }
@@ -268,7 +269,7 @@ jobs:
           dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/lecture.mp4)"
           awk -v d="$dur" 'BEGIN { exit !(d > 34 && d < 38) }' || { echo "::error::exported duration $dur, expected ~36 s"; exit 1; }
           chapters="$(ffprobe -v error -show_chapters -of csv=p=0 out/lecture.mp4 | wc -l | tr -d ' ')"
-          [ "$chapters" -ge 2 ] || { echo "::error::expected >= 2 chapters, got $chapters"; exit 1; }
+          [ "$chapters" -ge 1 ] || { echo "::error::expected >= 1 chapter, got $chapters"; exit 1; }
 
           # GUI: still running after a few seconds == platform plugin + main window OK.
           set +e
