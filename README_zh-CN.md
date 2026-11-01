@@ -108,7 +108,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 - 支持自然排序和自定义顺序。
 - 支持一个合并 PDF 或每个文件夹一个 PDF。
 - 减小文件大小时可控制宽高比、缩放尺寸和 JPEG 质量。
-- 视频模式可按时间线把文件夹重建为小体积 MP4，可复制或压缩原音轨，每张幻灯片一个章节。
+- 视频模式可按时间线把文件夹重建为小体积 MP4，可复制或压缩原音轨（AAC 或 Opus），每张幻灯片一个章节。
 
 ### 性能
 
@@ -613,12 +613,16 @@ Slides Export 用于从幻灯片文件夹生成 PDF 或视频。使用顶部的 
 | Resolution | Original、1080p、720p、480p | 不会放大幻灯片；宽高比不同的图片会加黑边。 |
 | Quality | High (CRF 18)、Standard (CRF 23)、Small (CRF 28) | H.264 画质。90 分钟课程的画面部分约 1 MB。 |
 | Repeat Frame | Off、30 s、1 min、2 min、5 min、10 min | 按此间隔重复当前幻灯片。部分播放器跳转后会显示下一帧，重复帧可让误差保持在该间隔内。Off 表示每次切换只有一帧。 |
-| Audio | Copy original、Compress (AAC) | Copy 原样保留音轨；Compress 按下方设置重新编码。无法放入 MP4 的音频会自动重新编码。 |
-| Bitrate / Channels / Sample Rate | 24–128 kbps、Mono/Stereo、Original–16 kHz | 仅用于 Compress。语音用 32–48 kbps 单声道足够。 |
+| Audio | Copy original、Compress (AAC)、Compress (Opus) | Copy 原样保留音轨。AAC 到处都能播放。Opus 在相同语音质量下体积约为 AAC 的三分之一；VLC、IINA、mpv、浏览器、Windows 和 Android 都能播放，但 Apple 的 QuickTime Player 和“照片”可能无法播放。无法放入 MP4 的音频会自动重新编码为 AAC。 |
+| Bitrate | AAC 16–128 kbps（默认 48）、Opus 8–48 kbps（默认 16） | 决定文件大小的主要因素。单声道语音：AAC 32–48，Opus 12–16。 |
+| Channels | Mono、Stereo | 仅用于压缩。 |
+| Sample Rate | Original、48–16 kHz | 仅用于 AAC。Opus 固定以 48 kHz 运行，并根据码率自行选择带宽。 |
 
 每张幻灯片对应一个章节，名称为其 PDF 页码（**Slide 3** 即 PDF 第 3 页），支持章节的播放器可以直接跳到某张幻灯片。
 
-示例：99 分钟 1080p 录屏（249 MB）在 48 kbps 单声道音频下约 36 MB，直接复制原音轨约 47 MB，无音频约 1 MB。文件大小主要由音频决定，幻灯片画面本身约 1 MB。
+示例：99 分钟 1080p 录屏（249 MB）用 Opus 12 kbps 约 10 MB，Opus 16 kbps 约 14 MB，AAC 48 kbps 约 38 MB，直接复制原音轨约 47 MB，无音频约 1 MB。文件大小主要由音频决定，幻灯片画面本身约 1 MB。
+
+重新编码的音频与播放器一样遵循源文件的时间戳：录屏软件丢掉音频的地方（录屏中很常见，上述讲座共约 3 秒）会用静音补齐，因此讲解声音与幻灯片始终保持同步。
 
 ## 命令行指南
 
@@ -745,10 +749,10 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `--video-height` | int | 视频高度（像素），例如 `1080`、`720`、`480`；`0` 表示幻灯片尺寸。不会放大幻灯片。默认 `1080`。 |
 | `--video-crf` | int | H.264 画质 `0` 到 `51`，越小越好（`18` 高、`23` 标准、`28` 小文件）。默认 `23`。 |
 | `--video-repeat` | int | 每 N 秒重复当前幻灯片；`0` 表示只在切换时出帧。默认 `120`。 |
-| `--video-audio` | mode | `copy`、`compress`（AAC）或 `none`。默认 `compress`。 |
-| `--video-audio-bitrate` | int | AAC 码率（kbps），`16` 到 `320`。默认 `48`。仅用于 compress。 |
-| `--video-audio-channels` | int | `1`（单声道）或 `2`（立体声）。默认 `1`。仅用于 compress。 |
-| `--video-audio-rate` | int | AAC 采样率（Hz），`8000` 到 `48000`；`0` 表示源采样率（最高 48000）。默认 `0`。仅用于 compress。 |
+| `--video-audio` | mode | `aac`、`opus`、`copy` 或 `none`（`compress` 等同 `aac`）。默认 `aac`。 |
+| `--video-audio-bitrate` | int | 码率（kbps）：AAC `16` 到 `320`（默认 `48`），Opus `6` 到 `256`（默认 `16`）。仅用于 AAC/Opus。 |
+| `--video-audio-channels` | int | `1`（单声道）或 `2`（立体声）。默认 `1`。仅用于 AAC/Opus。 |
+| `--video-audio-rate` | int | AAC 采样率（Hz），`8000` 到 `48000`；`0` 表示源采样率（最高 48000）。默认 `0`。仅用于 AAC。 |
 
 `--pdf-*` 与 `--video-*` 的默认值与 Slides Export 默认设置相同。导出设置不会在多次运行之间保存。
 | `--compatible` | flag | Electron 兼容模式（输出 PNG 幻灯片，去除 `screen_` 前缀，跳过后处理）。 |
@@ -888,7 +892,7 @@ slides_Lecture01/slide_Lecture01_001.jpg
 - Qt 6 Core、Widgets、Gui
 - OpenCV 4.x core、imgproc、imgcodecs
 - FFmpeg 开发库：libavcodec、libavformat、libavutil、libswscale、libswresample
-- 视频模式需要启用 libx264 的 FFmpeg（`vcpkg.json` 已启用）；若没有，会使用其他可用的 H.264 编码器
+- 视频模式需要启用 libx264 的 FFmpeg（`vcpkg.json` 已启用）；若没有，会使用其他可用的 H.264 编码器。Opus 音频需要 FFmpeg 启用 libopus（`vcpkg.json` 已启用）；若没有，Opus 选项不可用
 
 可选：
 

@@ -552,16 +552,18 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         QStringLiteral("Repeat the current slide every N seconds; 0 = only at slide changes. "
                        "Default: 120."), QStringLiteral("seconds"));
     QCommandLineOption videoAudioOpt(QStringLiteral("video-audio"),
-        QStringLiteral("Audio for --export-video: copy | compress | none. Default: compress."),
+        QStringLiteral("Audio for --export-video: aac | opus | copy | none. aac and opus re-encode "
+                       "(opus is about a third of the size for speech; compress = aac). Default: aac."),
         QStringLiteral("mode"));
     QCommandLineOption videoAudioBitrateOpt(QStringLiteral("video-audio-bitrate"),
-        QStringLiteral("AAC bitrate in kbps for --video-audio compress (16..320). Default: 48."),
+        QStringLiteral("Bitrate in kbps for --video-audio aac (16..320, default 48) or opus "
+                       "(6..256, default 16)."),
         QStringLiteral("kbps"));
     QCommandLineOption videoAudioChannelsOpt(QStringLiteral("video-audio-channels"),
-        QStringLiteral("AAC channels for --video-audio compress: 1 (mono) | 2 (stereo). Default: 1."),
+        QStringLiteral("Channels for --video-audio aac|opus: 1 (mono) | 2 (stereo). Default: 1."),
         QStringLiteral("n"));
     QCommandLineOption videoAudioRateOpt(QStringLiteral("video-audio-rate"),
-        QStringLiteral("AAC sample rate in Hz for --video-audio compress (8000..48000); 0 = source "
+        QStringLiteral("Sample rate in Hz for --video-audio aac (8000..48000); 0 = source "
                        "rate (max 48000). Default: 0."), QStringLiteral("hz"));
 
     QCommandLineOption jsonOpt(QStringLiteral("json"),
@@ -853,17 +855,25 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     m_videoOptions = VideoExportOptions();
     if (parser.isSet(videoAudioOpt)) {
         const QString mode = parser.value(videoAudioOpt).trimmed().toLower();
-        if (mode != QLatin1String("copy") && mode != QLatin1String("compress") && mode != QLatin1String("none")) {
-            *errorOut = QStringLiteral("--video-audio must be copy, compress or none");
+        if (mode != QLatin1String("aac") && mode != QLatin1String("opus") && mode != QLatin1String("compress")
+            && mode != QLatin1String("copy") && mode != QLatin1String("none")) {
+            *errorOut = QStringLiteral("--video-audio must be aac, opus, copy or none");
             return false;
         }
         m_videoOptions.audioMode = VideoExportOptions::audioModeFromString(mode, m_videoOptions.audioMode);
+        if (m_videoOptions.audioMode == VideoExportOptions::AudioMode::Opus && !VideoExporter::isOpusAvailable()) {
+            *errorOut = QStringLiteral("--video-audio opus: this build has no Opus encoder");
+            return false;
+        }
     }
+    const VideoExportOptions::AudioMode audioMode = m_videoOptions.audioMode;
+    m_videoOptions.audioBitrateKbps = VideoExportOptions::defaultBitrateKbps(audioMode);
     if (parser.isSet(videoHeightOpt) && !intOption(videoHeightOpt, 0, 4320, &m_videoOptions.targetHeight)) return false;
     if (parser.isSet(videoCrfOpt) && !intOption(videoCrfOpt, 0, 51, &m_videoOptions.crf)) return false;
     if (parser.isSet(videoRepeatOpt) && !intOption(videoRepeatOpt, 0, 86400, &m_videoOptions.repeatSeconds)) return false;
     if (parser.isSet(videoAudioBitrateOpt)
-        && !intOption(videoAudioBitrateOpt, 16, 320, &m_videoOptions.audioBitrateKbps)) return false;
+        && !intOption(videoAudioBitrateOpt, VideoExportOptions::minBitrateKbps(audioMode),
+                      VideoExportOptions::maxBitrateKbps(audioMode), &m_videoOptions.audioBitrateKbps)) return false;
     if (parser.isSet(videoAudioChannelsOpt)
         && !intOption(videoAudioChannelsOpt, 1, 2, &m_videoOptions.audioChannels)) return false;
     if (parser.isSet(videoAudioRateOpt)) {
@@ -875,8 +885,12 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     }
     const bool compressFlags = parser.isSet(videoAudioBitrateOpt) || parser.isSet(videoAudioChannelsOpt)
                                || parser.isSet(videoAudioRateOpt);
-    if (compressFlags && m_videoOptions.audioMode != VideoExportOptions::AudioMode::Compress) {
-        *errorOut = QStringLiteral("--video-audio-bitrate/-channels/-rate only apply to --video-audio compress");
+    if (compressFlags && !VideoExportOptions::isCompressed(audioMode)) {
+        *errorOut = QStringLiteral("--video-audio-bitrate/-channels/-rate only apply to --video-audio aac or opus");
+        return false;
+    }
+    if (parser.isSet(videoAudioRateOpt) && audioMode == VideoExportOptions::AudioMode::Opus) {
+        *errorOut = QStringLiteral("--video-audio-rate does not apply to opus (always 48 kHz)");
         return false;
     }
 

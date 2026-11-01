@@ -19,6 +19,7 @@
         "avcodec",
         "avformat",
         "gpl",
+        "opus",
         "swresample",
         "swscale",
         "version3",

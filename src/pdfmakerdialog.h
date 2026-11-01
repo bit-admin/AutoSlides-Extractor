@@ -11,11 +11,11 @@
 #include <QProgressBar>
 #include <QString>
 #include <QStringList>
+#include "videoexporter.h"
 #include <QMap>
 
 class QButtonGroup;
 class QStackedWidget;
-struct VideoExportOptions;
 
 /**
  * @brief Slides Export: turn slide folders into PDFs or videos.
@@ -76,6 +76,7 @@ private:
     void chooseAudioSource(const QString& folderPath);
     void clearAudioSource(const QString& folderPath);
     void updateAudioControls();
+    void populateBitrates(VideoExportOptions::AudioMode codec, int selectKbps);
     VideoExportOptions videoOptionsFromUi() const;
     void applyVideoOptionsToUi(const VideoExportOptions& options);
     void setExporting(bool exporting);
@@ -139,6 +140,7 @@ private:
     QComboBox* m_audioChannelsComboBox = nullptr;
     QLabel* m_audioSampleRateLabel = nullptr;
     QComboBox* m_audioSampleRateComboBox = nullptr;
+    QString m_bitrateCodec;                  // codec the bitrate list is filled for ("aac"/"opus")
     QMap<QString, QString> m_audioSources;   // folder path -> chosen audio source ("" = none)
     QString m_lastVideoPath;
     bool m_lastVideoIsFolder = false;

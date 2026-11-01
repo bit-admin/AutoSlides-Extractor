@@ -108,7 +108,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 - Sorts folders naturally or uses custom ordering.
 - Exports one combined PDF or one PDF per selected folder.
 - Offers resize, aspect ratio, and JPEG quality controls when reducing file size.
-- Video mode rebuilds a folder as a small MP4 that follows its timeline, with the original audio copied or compressed, and one chapter per slide.
+- Video mode rebuilds a folder as a small MP4 that follows its timeline, with the original audio copied or compressed (AAC or Opus), and one chapter per slide.
 
 ### Performance
 
@@ -613,12 +613,16 @@ Settings:
 | Resolution | Original, 1080p, 720p, 480p | Slides are never scaled up; other aspect ratios are letterboxed. |
 | Quality | High (CRF 18), Standard (CRF 23), Small (CRF 28) | H.264 quality. The picture is only about 1 MB for a 90-minute lecture. |
 | Repeat Frame | Off, 30 s, 1 min, 2 min, 5 min, 10 min | Shows the current slide again at this interval. Some players show the next frame after a seek; repeats keep them close. Off gives one frame per slide change. |
-| Audio | Copy original, Compress (AAC) | Copy keeps the source track unchanged. Compress re-encodes it with the settings below. Audio that cannot go into MP4 is always re-encoded. |
-| Bitrate / Channels / Sample Rate | 24–128 kbps, Mono/Stereo, Original–16 kHz | Compress only. 32–48 kbps mono is plenty for speech. |
+| Audio | Copy original, Compress (AAC), Compress (Opus) | Copy keeps the source track unchanged. AAC plays everywhere. Opus is about a third of the size for the same speech quality; it plays in VLC, IINA, mpv, browsers, Windows and Android, but Apple's QuickTime Player and Photos may not play it. Audio that cannot go into MP4 is always re-encoded as AAC. |
+| Bitrate | AAC 16–128 kbps (default 48), Opus 8–48 kbps (default 16) | Decides most of the file size. For mono speech: AAC 32–48, Opus 12–16. |
+| Channels | Mono, Stereo | Compress only. |
+| Sample Rate | Original, 48–16 kHz | AAC only. Opus always runs at 48 kHz and picks its own bandwidth from the bitrate. |
 
 Each slide gets a chapter named after its PDF page number (**Slide 3** is page 3 of the PDF), so players with chapter support can jump between slides.
 
-Example: a 99-minute 1080p recording (249 MB) becomes about 36 MB with 48 kbps mono audio, 47 MB with the original audio copied, or 1 MB without audio. Audio decides the size; the slide video itself is about 1 MB.
+Example: a 99-minute 1080p recording (249 MB) becomes about 10 MB with Opus 12 kbps, 14 MB with Opus 16 kbps, 38 MB with AAC 48 kbps, 47 MB with the original audio copied, or 1 MB without audio. Audio decides the size; the slide video itself is about 1 MB.
+
+Re-encoded audio follows the source's timestamps, like a player does: where the recorder dropped audio (common in screen recordings, about 3 s over that lecture), the export fills the hole with silence, so the voice stays in step with the slides.
 
 ## Command Line Guide
 
@@ -745,10 +749,10 @@ Common events:
 | `--video-height` | int | Video height in pixels, for example `1080`, `720`, `480`; `0` = slide size. Never scales slides up. Default `1080`. |
 | `--video-crf` | int | H.264 quality `0` to `51`, lower is better (`18` high, `23` standard, `28` small). Default `23`. |
 | `--video-repeat` | int | Repeat the current slide every N seconds; `0` = only at slide changes. Default `120`. |
-| `--video-audio` | mode | `copy`, `compress` (AAC), or `none`. Default `compress`. |
-| `--video-audio-bitrate` | int | AAC bitrate in kbps, `16` to `320`. Default `48`. Compress only. |
-| `--video-audio-channels` | int | `1` (mono) or `2` (stereo). Default `1`. Compress only. |
-| `--video-audio-rate` | int | AAC sample rate in Hz, `8000` to `48000`; `0` = source rate (at most 48000). Default `0`. Compress only. |
+| `--video-audio` | mode | `aac`, `opus`, `copy`, or `none` (`compress` = `aac`). Default `aac`. |
+| `--video-audio-bitrate` | int | Bitrate in kbps: AAC `16` to `320` (default `48`), Opus `6` to `256` (default `16`). AAC/Opus only. |
+| `--video-audio-channels` | int | `1` (mono) or `2` (stereo). Default `1`. AAC/Opus only. |
+| `--video-audio-rate` | int | AAC sample rate in Hz, `8000` to `48000`; `0` = source rate (at most 48000). Default `0`. AAC only. |
 
 The `--pdf-*` and `--video-*` defaults are the Slides Export defaults. Export settings are not saved between runs.
 | `--compatible` | flag | Electron-compatible mode (PNG slides, no `screen_` prefix, skips post-processing). |
@@ -888,7 +892,7 @@ Required:
 - Qt 6 Core, Widgets, Gui
 - OpenCV 4.x core, imgproc, imgcodecs
 - FFmpeg development libraries: libavcodec, libavformat, libavutil, libswscale, libswresample
-- For Video mode: an FFmpeg built with libx264 (`vcpkg.json` enables it); without it, another H.264 encoder is used if available
+- For Video mode: an FFmpeg built with libx264 (`vcpkg.json` enables it); without it, another H.264 encoder is used if available. Opus audio needs libopus in FFmpeg (also enabled in `vcpkg.json`); without it the Opus choice is disabled
 
 Optional:
 
