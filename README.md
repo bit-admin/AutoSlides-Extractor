@@ -701,6 +701,7 @@ Common events:
 | `ml_started` | ML classification started with an execution provider. |
 | `ml_failed` | ML classifier failed to initialize or run. |
 | `post_complete` | Post-processing summary. |
+| `pdf_exported` | `--export-pdf` result: path, bytes, pages. |
 | `video_progress` | `--export-video` progress in percent. |
 | `video_exported` | `--export-video` result: path, bytes, duration, frames, chapters, audio. |
 | `done` | Whole run completed successfully. |
@@ -735,8 +736,21 @@ Common events:
 | `--ml-autocrop-maybe` | flag | Auto-crop `may_be_slide` images before deletion and keep if crop succeeds. |
 | `--ml-postcrop-dedup` | flag | Re-check pHash duplicates after post-process auto-cropping. |
 | `--write-timeline` | flag | Write `timeline.json` media-time map in output slide folders. |
-| `--export-video` | flag | Also write `<output>/<name>.mp4`: the slides as a video following the timeline, with the input video's audio. Implies `--write-timeline`. Uses the Slides Export defaults: 1080p, Standard quality (CRF 23), a repeat frame every 2 min. |
-| `--video-audio` | mode | Audio for `--export-video`: `copy`, `compress` (AAC 48 kbps mono), or `none`. Default: `compress`. |
+| `--export-pdf` | flag | Also write `<output>/<name>.pdf` with the remaining slides, as Slides Export does. Not allowed with `--compatible`. |
+| `--pdf-reduce-size` | bool | Crop to `--pdf-aspect`, scale to `--pdf-height` and re-encode as JPEG. Default `true`; `false` keeps every image as-is. |
+| `--pdf-aspect` | ratio | `16:9` or `4:3`. Default `16:9`. |
+| `--pdf-height` | int | Page height in pixels, for example `1080`, `720`, `480`, `360`; `0` = original. Default `720`. |
+| `--pdf-jpeg-quality` | int | JPEG quality `1` to `100`. Default `50`. |
+| `--export-video` | flag | Also write `<output>/<name>.mp4`: the slides as a video following the timeline, with the input video's audio. Implies `--write-timeline`. |
+| `--video-height` | int | Video height in pixels, for example `1080`, `720`, `480`; `0` = slide size. Never scales slides up. Default `1080`. |
+| `--video-crf` | int | H.264 quality `0` to `51`, lower is better (`18` high, `23` standard, `28` small). Default `23`. |
+| `--video-repeat` | int | Repeat the current slide every N seconds; `0` = only at slide changes. Default `120`. |
+| `--video-audio` | mode | `copy`, `compress` (AAC), or `none`. Default `compress`. |
+| `--video-audio-bitrate` | int | AAC bitrate in kbps, `16` to `320`. Default `48`. Compress only. |
+| `--video-audio-channels` | int | `1` (mono) or `2` (stereo). Default `1`. Compress only. |
+| `--video-audio-rate` | int | AAC sample rate in Hz, `8000` to `48000`; `0` = source rate (at most 48000). Default `0`. Compress only. |
+
+The `--pdf-*` and `--video-*` defaults are the Slides Export defaults. Export settings are not saved between runs.
 | `--compatible` | flag | Electron-compatible mode (PNG slides, no `screen_` prefix, skips post-processing). |
 | `--json` | flag | Emit JSON Lines events and suppress the progress bar. |
 | `--help` | flag | Print help. |
@@ -754,6 +768,7 @@ Boolean values accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 | `4` | Video processing failed. |
 | `5` | Post-processing failed. |
 | `6` | Video export failed. |
+| `7` | PDF export failed. |
 | `130` | Cancelled by SIGINT, usually Ctrl-C. |
 | `143` | Cancelled by SIGTERM. |
 

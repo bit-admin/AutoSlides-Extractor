@@ -701,6 +701,7 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `ml_started` | ML 分类开始，并包含 execution provider。 |
 | `ml_failed` | ML 分类器初始化或运行失败。 |
 | `post_complete` | 后处理汇总。 |
+| `pdf_exported` | `--export-pdf` 结果：路径、字节数、页数。 |
 | `video_progress` | `--export-video` 进度（百分比）。 |
 | `video_exported` | `--export-video` 结果：路径、字节数、时长、帧数、章节数、音频。 |
 | `done` | 全流程成功完成。 |
@@ -735,8 +736,21 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `--ml-autocrop-maybe` | flag | 在删除 `may_be_slide` 图片前自动裁剪，成功则保留。 |
 | `--ml-postcrop-dedup` | flag | 后处理自动裁剪后重新检测 pHash 重复项。 |
 | `--write-timeline` | flag | 在输出幻灯片文件夹中写入 `timeline.json` 媒体时间映射文件。 |
-| `--export-video` | flag | 额外生成 `<output>/<name>.mp4`：按时间线把幻灯片生成视频，并使用输入视频的音频。隐含 `--write-timeline`。使用 Slides Export 的默认设置：1080p、Standard 画质（CRF 23）、每 2 分钟重复一帧。 |
-| `--video-audio` | mode | `--export-video` 的音频：`copy`、`compress`（AAC 48 kbps 单声道）或 `none`。默认 `compress`。 |
+| `--export-pdf` | flag | 额外生成 `<output>/<name>.pdf`，包含剩余幻灯片，与 Slides Export 相同。不可与 `--compatible` 同用。 |
+| `--pdf-reduce-size` | bool | 按 `--pdf-aspect` 裁剪、缩放到 `--pdf-height` 并重新编码为 JPEG。默认 `true`；`false` 保持原图。 |
+| `--pdf-aspect` | ratio | `16:9` 或 `4:3`。默认 `16:9`。 |
+| `--pdf-height` | int | 页面高度（像素），例如 `1080`、`720`、`480`、`360`；`0` 表示原始尺寸。默认 `720`。 |
+| `--pdf-jpeg-quality` | int | JPEG 质量，`1` 到 `100`。默认 `50`。 |
+| `--export-video` | flag | 额外生成 `<output>/<name>.mp4`：按时间线把幻灯片生成视频，并使用输入视频的音频。隐含 `--write-timeline`。 |
+| `--video-height` | int | 视频高度（像素），例如 `1080`、`720`、`480`；`0` 表示幻灯片尺寸。不会放大幻灯片。默认 `1080`。 |
+| `--video-crf` | int | H.264 画质 `0` 到 `51`，越小越好（`18` 高、`23` 标准、`28` 小文件）。默认 `23`。 |
+| `--video-repeat` | int | 每 N 秒重复当前幻灯片；`0` 表示只在切换时出帧。默认 `120`。 |
+| `--video-audio` | mode | `copy`、`compress`（AAC）或 `none`。默认 `compress`。 |
+| `--video-audio-bitrate` | int | AAC 码率（kbps），`16` 到 `320`。默认 `48`。仅用于 compress。 |
+| `--video-audio-channels` | int | `1`（单声道）或 `2`（立体声）。默认 `1`。仅用于 compress。 |
+| `--video-audio-rate` | int | AAC 采样率（Hz），`8000` 到 `48000`；`0` 表示源采样率（最高 48000）。默认 `0`。仅用于 compress。 |
+
+`--pdf-*` 与 `--video-*` 的默认值与 Slides Export 默认设置相同。导出设置不会在多次运行之间保存。
 | `--compatible` | flag | Electron 兼容模式（输出 PNG 幻灯片，去除 `screen_` 前缀，跳过后处理）。 |
 | `--json` | flag | 输出 JSON Lines 并关闭文本进度条。 |
 | `--help` | flag | 打印帮助。 |
@@ -754,6 +768,7 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `4` | 视频处理失败。 |
 | `5` | 后处理失败。 |
 | `6` | 视频导出失败。 |
+| `7` | PDF 导出失败。 |
 | `130` | 被 SIGINT 取消，通常是 Ctrl-C。 |
 | `143` | 被 SIGTERM 取消。 |
 

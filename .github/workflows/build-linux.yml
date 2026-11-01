@@ -253,13 +253,15 @@ jobs:
                  -filter_complex "[0:v][1:v][2:v]concat=n=3:v=1,format=yuv420p[v]" \
                  -map "[v]" -map 3:a -c:v libx264 -g 60 -c:a aac -b:a 96k lecture.mp4
           "$app" --video lecture.mp4 --output out --json --phash-redundant --ml-classify --write-timeline \
-            --export-video --video-audio compress | tee events.ndjson
+            --export-pdf --export-video --video-audio compress | tee events.ndjson
           done_line="$(grep '"event":"done"' events.ndjson)"
           echo "$done_line" | grep -q '"exitCode":0' || { echo "::error::CLI smoke test failed"; exit 1; }
           count="$(echo "$done_line" | sed -E 's/.*"slideCount":([0-9]+).*/\1/')"
           [ "$count" -ge 2 ] || { echo "::error::expected >= 2 slides, got $count"; exit 1; }
           [ -f out/slides_lecture/timeline.json ] || { echo "::error::timeline.json missing"; exit 1; }
 
+          grep -q '"event":"pdf_exported"' events.ndjson && [ -s out/lecture.pdf ] \
+            || { echo "::error::PDF export missing"; exit 1; }
           # Video export: H.264 + AAC, full length, chapters for the slides left
           # after ML (which may remove the colour-bar / solid-colour test slides).
           grep '"event":"video_exported"' events.ndjson || { echo "::error::video export missing"; exit 1; }
