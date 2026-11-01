@@ -69,6 +69,11 @@ void PdfMakerDialog::setupUI()
     modeLayout->addStretch();
     mainLayout->addLayout(modeLayout);
 
+    QFrame* modeSeparator = new QFrame(this);
+    modeSeparator->setFrameShape(QFrame::HLine);
+    modeSeparator->setFrameShadow(QFrame::Sunken);
+    mainLayout->addWidget(modeSeparator);
+
     m_modeStack = new QStackedWidget(this);
     m_modeStack->addWidget(createPdfPage());
     m_modeStack->addWidget(createVideoPage());
@@ -121,24 +126,35 @@ QWidget* PdfMakerDialog::createVideoPage()
     QVBoxLayout* layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);
 
+    // A label + combo pair. stretch > 0 puts the pair in its own box that takes
+    // an equal share of the row; 0 packs it at its natural size.
     auto addCombo = [&](QHBoxLayout* row, const QString& label, QLabel** labelOut,
-                        const QList<QPair<QString, QVariant>>& items, const QString& tip) {
+                        const QList<QPair<QString, QVariant>>& items, const QString& tip,
+                        int stretch = 0) {
         QLabel* l = new QLabel(label, page);
-        row->addWidget(l);
         QComboBox* c = new QComboBox(page);
         for (const auto& it : items) {
             c->addItem(it.first, it.second);
         }
         c->setToolTip(tip);
         l->setToolTip(tip);
-        row->addWidget(c);
+        if (stretch > 0) {
+            QHBoxLayout* pair = new QHBoxLayout();
+            pair->addWidget(l);
+            pair->addWidget(c, 1);
+            row->addLayout(pair, stretch);
+        } else {
+            row->addWidget(l);
+            row->addWidget(c);
+        }
         if (labelOut) {
             *labelOut = l;
         }
         return c;
     };
 
-    // Row 1: picture
+    // First row (like the PDF page): picture settings on the left, audio mode
+    // pinned far right
     QHBoxLayout* videoRow = new QHBoxLayout();
     m_videoResolutionComboBox = addCombo(videoRow, "Resolution:", nullptr,
         {{"Original", 0}, {"1080p", 1080}, {"720p", 720}, {"480p", 480}},
@@ -152,42 +168,37 @@ QWidget* PdfMakerDialog::createVideoPage()
         "Show the current slide again at this interval. Some players show the next frame "
         "after a seek; repeats keep them close. Off = one frame per slide change (smallest).");
     videoRow->addStretch();
-    layout->addLayout(videoRow);
-
-    // Row 2: audio
-    QHBoxLayout* audioRow = new QHBoxLayout();
-    m_audioModeComboBox = addCombo(audioRow, "Audio:", nullptr,
+    m_audioModeComboBox = addCombo(videoRow, "Audio:", nullptr,
         {{"Copy original", "copy"}, {"Compress (AAC)", "compress"}},
         "Used for folders with an audio source. Copy keeps the original track unchanged; "
-        "Compress re-encodes it to AAC with the settings on the right.");
-    m_audioBitrateComboBox = addCombo(audioRow, "Bitrate:", &m_audioBitrateLabel,
-        {{"24 kbps", 24}, {"32 kbps", 32}, {"48 kbps", 48}, {"64 kbps", 64},
-         {"96 kbps", 96}, {"128 kbps", 128}},
-        "AAC bitrate. 32–48 kbps mono is plenty for speech.");
-    m_audioChannelsComboBox = addCombo(audioRow, "Channels:", &m_audioChannelsLabel,
-        {{"Mono", 1}, {"Stereo", 2}}, "Mono halves the bitrate needed for the same quality.");
-    m_audioSampleRateComboBox = addCombo(audioRow, "Sample Rate:", &m_audioSampleRateLabel,
-        {{"Original", 0}, {"48 kHz", 48000}, {"44.1 kHz", 44100}, {"32 kHz", 32000},
-         {"24 kHz", 24000}, {"16 kHz", 16000}},
-        "Original keeps the source rate (at most 48 kHz). Lower rates suit low bitrates.");
-    audioRow->addStretch();
-    layout->addLayout(audioRow);
+        "Compress re-encodes it to AAC with the settings below.");
+    layout->addLayout(videoRow);
 
     QFrame* separator = new QFrame(page);
     separator->setFrameShape(QFrame::HLine);
     separator->setFrameShadow(QFrame::Sunken);
     layout->addWidget(separator);
 
-    QLabel* hint = new QLabel(
-        "Each folder becomes one MP4 that follows its timeline. Audio comes from the source "
-        "chosen per folder (the original video is filled in when the timeline recorded it); "
-        "folders without a source are exported silent.", page);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
+    // Second row: AAC settings, equal width across the whole line
+    QHBoxLayout* audioRow = new QHBoxLayout();
+    m_audioBitrateComboBox = addCombo(audioRow, "Bitrate:", &m_audioBitrateLabel,
+        {{"24 kbps", 24}, {"32 kbps", 32}, {"48 kbps", 48}, {"64 kbps", 64},
+         {"96 kbps", 96}, {"128 kbps", 128}},
+        "AAC bitrate. 32–48 kbps mono is plenty for speech.", 1);
+    m_audioChannelsComboBox = addCombo(audioRow, "Channels:", &m_audioChannelsLabel,
+        {{"Mono", 1}, {"Stereo", 2}}, "Mono halves the bitrate needed for the same quality.", 1);
+    m_audioSampleRateComboBox = addCombo(audioRow, "Sample Rate:", &m_audioSampleRateLabel,
+        {{"Original", 0}, {"48 kHz", 48000}, {"44.1 kHz", 44100}, {"32 kHz", 32000},
+         {"24 kHz", 24000}, {"16 kHz", 16000}},
+        "Original keeps the source rate (at most 48 kHz). Lower rates suit low bitrates.", 1);
+    layout->addLayout(audioRow);
 
     m_videoTable = new QTableWidget(page);
     m_videoTable->setColumnCount(5);
     m_videoTable->setHorizontalHeaderLabels({"", "Folder Name", "Count", "Audio Source", ""});
+    m_videoTable->horizontalHeaderItem(VCOL_AUDIO_SOURCE)->setToolTip(
+        "Original video or audio file for this folder's sound track. Filled in when the "
+        "timeline recorded the source video; folders without one are exported silent.");
     m_videoTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_videoTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_videoTable->setAlternatingRowColors(true);
