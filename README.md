@@ -108,6 +108,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 - Sorts folders naturally or uses custom ordering.
 - Exports one combined PDF or one PDF per selected folder.
 - Offers resize, aspect ratio, and JPEG quality controls when reducing file size.
+- Video mode rebuilds a folder as a small MP4 that follows its timeline, with the original audio copied or compressed, and one chapter per slide.
 
 ### Performance
 
@@ -540,7 +541,7 @@ For removed `ml_maybe_slide` items, Auto Crop first detects a valid slide area i
   <img src="docs/slides-export.png" alt="Slides Export PDF workflow" width="90%" />
 </p>
 
-Slides Export creates PDF documents from slide folders.
+Slides Export creates PDF documents or videos from slide folders. Use the **PDF** / **Video** switch at the top.
 
 ### Workflow
 
@@ -586,6 +587,38 @@ Suggested settings:
 | Best quality | Original size or 1080p, JPEG 85-95. |
 | Smaller classroom handout | 720p, JPEG 70-85. |
 | Very small archive | 480p, JPEG 50-70, verify readability. |
+
+### Video Mode
+
+Switch to **Video** at the top of Slides Export to turn each selected folder into a small MP4 that follows the folder's `timeline.json`. The result plays like the original recording, with the slide images instead of the screen capture, so you can still listen to the lecture.
+
+1. Click **Video** at the top of Slides Export.
+2. Select one or more folders. Folders without `timeline.json` are greyed out; extract them again with the timeline on.
+3. Check the **Audio Source** column. When the timeline recorded the original video and it still exists, it is filled in automatically. Use **Choose...** to pick the original video or any audio file, or **Clear** to export without audio.
+4. Choose the video and audio settings.
+5. Click **Make Video**. One folder asks for a file name; several folders ask for an output folder with one MP4 each.
+
+What is shown when:
+
+| Timeline state | On screen |
+| --- | --- |
+| Kept slide | That slide, from its change time until the next change. |
+| Duplicate (the lecturer went back to an earlier slide) | The kept copy of that earlier slide. |
+| Removed (ML "not a slide", exclusion list, manual trash) | The previous slide stays on screen. |
+
+Settings:
+
+| Setting | Options | Notes |
+| --- | --- | --- |
+| Resolution | Original, 1080p, 720p, 480p | Slides are never scaled up; other aspect ratios are letterboxed. |
+| Quality | High (CRF 18), Standard (CRF 23), Small (CRF 28) | H.264 quality. The picture is only about 1 MB for a 90-minute lecture. |
+| Repeat Frame | Off, 30 s, 1 min, 2 min, 5 min, 10 min | Shows the current slide again at this interval. Some players show the next frame after a seek; repeats keep them close. Off gives one frame per slide change. |
+| Audio | Copy original, Compress (AAC) | Copy keeps the source track unchanged. Compress re-encodes it with the settings below. Audio that cannot go into MP4 is always re-encoded. |
+| Bitrate / Channels / Sample Rate | 24–128 kbps, Mono/Stereo, Original–16 kHz | Compress only. 32–48 kbps mono is plenty for speech. |
+
+Each slide gets a chapter named after its PDF page number (**Slide 3** is page 3 of the PDF), so players with chapter support can jump between slides.
+
+Example: a 99-minute 1080p recording (249 MB) becomes about 36 MB with 48 kbps mono audio, 47 MB with the original audio copied, or 1 MB without audio. Audio decides the size; the slide video itself is about 1 MB.
 
 ## Command Line Guide
 
@@ -668,6 +701,8 @@ Common events:
 | `ml_started` | ML classification started with an execution provider. |
 | `ml_failed` | ML classifier failed to initialize or run. |
 | `post_complete` | Post-processing summary. |
+| `video_progress` | `--export-video` progress in percent. |
+| `video_exported` | `--export-video` result: path, bytes, duration, frames, chapters, audio. |
 | `done` | Whole run completed successfully. |
 | `cancelled` | SIGINT or SIGTERM cancellation completed. |
 | `error` | Structured error, usually written to stderr. |
@@ -700,6 +735,8 @@ Common events:
 | `--ml-autocrop-maybe` | flag | Auto-crop `may_be_slide` images before deletion and keep if crop succeeds. |
 | `--ml-postcrop-dedup` | flag | Re-check pHash duplicates after post-process auto-cropping. |
 | `--write-timeline` | flag | Write `timeline.json` media-time map in output slide folders. |
+| `--export-video` | flag | Also write `<output>/<name>.mp4`: the slides as a video following the timeline, with the input video's audio. Implies `--write-timeline`. Resolution, quality, repeat interval and audio compression come from the saved Slides Export settings. |
+| `--video-audio` | mode | Audio for `--export-video`: `copy`, `compress`, or `none`. Default: the saved Slides Export setting. |
 | `--compatible` | flag | Electron-compatible mode (PNG slides, no `screen_` prefix, skips post-processing). |
 | `--json` | flag | Emit JSON Lines events and suppress the progress bar. |
 | `--help` | flag | Print help. |
@@ -716,6 +753,7 @@ Boolean values accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 | `3` | Bad input or output path. |
 | `4` | Video processing failed. |
 | `5` | Post-processing failed. |
+| `6` | Video export failed. |
 | `130` | Cancelled by SIGINT, usually Ctrl-C. |
 | `143` | Cancelled by SIGTERM. |
 
@@ -763,6 +801,7 @@ When **Write timeline.json** is enabled (GUI default on; CLI opt-in via `--write
 
 - **Events**: Array of capture events recording I-frame PTS media times (`changeAt`, `confirmedAt`) and `initialFile` basename.
 - **Resolutions**: Mutable resolution map tracking slide states (`canonical`, `duplicate`, `gap`). Post-processing and manual review update resolution statuses (e.g. `duplicateOf`, `exclusion`, `ai_filtered`, `manual_trash`) rather than deleting events, maintaining a stable media timeline history.
+- **Source** (optional): `source.path`, `source.duration` and `source.startTime` of the video the slides came from. Slides Export uses it to find the audio for Video mode.
 
 ### Application Trash
 
@@ -833,7 +872,8 @@ Required:
 - C++17 compiler
 - Qt 6 Core, Widgets, Gui
 - OpenCV 4.x core, imgproc, imgcodecs
-- FFmpeg development libraries: libavcodec, libavformat, libavutil, libswscale
+- FFmpeg development libraries: libavcodec, libavformat, libavutil, libswscale, libswresample
+- For Video mode: an FFmpeg built with libx264 (`vcpkg.json` enables it); without it, another H.264 encoder is used if available
 
 Optional:
 
@@ -1029,7 +1069,9 @@ For screen recordings with desktop interruptions:
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+The source code is licensed under the [MIT License](LICENSE).
+
+Release builds bundle FFmpeg built with libx264 (for Video mode), which is GPL software, so the released programs are distributed under the [GNU GPL, version 3](licenses/GPL-3.0.txt). Each package includes a `licenses` folder with this notice, the GPL text, and where to get the corresponding source; see [licenses/NOTICE.txt](licenses/NOTICE.txt).
 
 ---
 

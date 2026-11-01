@@ -117,6 +117,11 @@ bool TimelineMetadata::load(const QString& slidesDir, TimelineData& data)
         }
     }
 
+    const QJsonObject source = root.value(QStringLiteral("source")).toObject();
+    data.sourcePath = source.value(QStringLiteral("path")).toString();
+    data.sourceDuration = source.value(QStringLiteral("duration")).toDouble(-1.0);
+    data.sourceStartTime = source.value(QStringLiteral("startTime")).toDouble(0.0);
+
     const QJsonObject resObj = root.value(QStringLiteral("resolutions")).toObject();
     for (auto it = resObj.begin(); it != resObj.end(); ++it) {
         if (it.value().isObject()) {
@@ -150,6 +155,15 @@ bool TimelineMetadata::save(const QString& slidesDir, const TimelineData& data)
                                                  : data.extractor);
     root.insert(QStringLiteral("createdAt"), data.createdAt);
     root.insert(QStringLiteral("updatedAt"), data.updatedAt);
+    if (!data.sourcePath.isEmpty()) {
+        QJsonObject source;
+        source.insert(QStringLiteral("path"), data.sourcePath);
+        if (data.sourceDuration >= 0.0) {
+            source.insert(QStringLiteral("duration"), data.sourceDuration);
+        }
+        source.insert(QStringLiteral("startTime"), data.sourceStartTime);
+        root.insert(QStringLiteral("source"), source);
+    }
 
     QJsonArray eventsArr;
     for (const SlideCaptureEvent& e : data.events) {
@@ -204,6 +218,33 @@ bool TimelineMetadata::addConfirmedCapture(const QString& slidesDir,
     res.file = initialFile;
     data.resolutions.insert(event.id, res);
 
+    return save(slidesDir, data);
+}
+
+bool TimelineMetadata::setSource(const QString& slidesDir,
+                                 const QString& videoPath,
+                                 double duration,
+                                 double startTime)
+{
+    if (slidesDir.isEmpty() || videoPath.isEmpty()) {
+        return false;
+    }
+
+    QMutexLocker locker(&s_mutex);
+
+    TimelineData data;
+    if (!load(slidesDir, data)) {
+        return false;
+    }
+
+    const QString now = isoNowUtc();
+    if (data.createdAt.isEmpty()) {
+        data.createdAt = now;
+    }
+    data.updatedAt = now;
+    data.sourcePath = videoPath;
+    data.sourceDuration = duration > 0.0 ? duration : -1.0;
+    data.sourceStartTime = startTime;
     return save(slidesDir, data);
 }
 

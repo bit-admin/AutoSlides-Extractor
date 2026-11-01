@@ -99,6 +99,7 @@ DESKTOP="$APPDIR/usr/share/applications/$APP.desktop"
 ICON="$APPDIR/usr/share/icons/hicolor/256x256/apps/$APP.png"
 [ -f "$DESKTOP" ] || die "install did not produce $DESKTOP"
 [ -f "$ICON" ] || die "install did not produce $ICON"
+[ -f "$APPDIR/usr/share/doc/$APP/licenses/NOTICE.txt" ] || die "install did not produce the licence notice"
 
 cd "$OUT_DIR"
 rm -f "$BASENAME.AppImage"
@@ -124,7 +125,7 @@ missing="$(env -u LD_LIBRARY_PATH ldd "$APPDIR/usr/bin/$APP" | grep "not found" 
 for pattern in \
     'libQt6Core.so*' 'libQt6Gui.so*' 'libQt6Widgets.so*' \
     'libopencv_core*.so*' 'libopencv_imgproc*.so*' 'libopencv_imgcodecs*.so*' \
-    'libavcodec.so*' 'libavformat.so*' 'libavutil.so*' 'libswscale.so*' \
+    'libavcodec.so*' 'libavformat.so*' 'libavutil.so*' 'libswscale.so*' 'libswresample.so*' \
     'libonnxruntime.so*'; do
     # Static OpenCV/FFmpeg builds are linked into the binary instead; only fail if the
     # binary actually needs a shared copy that was not bundled.
@@ -203,7 +204,8 @@ if command -v dpkg-deb > /dev/null && command -v dpkg > /dev/null; then
     ln -s "$DEB_PREFIX/bin/$APP" "$DEB_ROOT/usr/bin/$APP"
     install -m 644 "$DESKTOP" "$DEB_ROOT/usr/share/applications/$APP.desktop"
     install -m 644 "$ICON" "$DEB_ROOT/usr/share/icons/hicolor/256x256/apps/$APP.png"
-    install -m 644 "$ROOT/LICENSE" "$DEB_ROOT/usr/share/doc/$DEB_PACKAGE/copyright"
+    { cat "$ROOT/licenses/NOTICE.txt"; echo; cat "$ROOT/LICENSE"; } > "$DEB_ROOT/usr/share/doc/$DEB_PACKAGE/copyright"
+    chmod 644 "$DEB_ROOT/usr/share/doc/$DEB_PACKAGE/copyright"
 
     # Sonames needed by any bundled ELF file but not bundled themselves.
     bundled="$(find "$DEB_ROOT$DEB_PREFIX/lib" -maxdepth 1 -name '*.so*' -printf '%f\n' | sort -u)"

@@ -37,6 +37,7 @@ public:
      */
     struct VideoInfo {
         double duration = 0.0;          // Duration in seconds
+        double startTime = 0.0;         // Container start time in seconds (frame PTS origin)
         double frameRate = 0.0;         // Frame rate
         int width = 0;                  // Video width
         int height = 0;                 // Video height

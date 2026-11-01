@@ -570,8 +570,15 @@ jobs:
             "Notes:"
             "- Portable CI build (not code-signed)."
             "- ML uses ONNX Runtime (DirectML/CPU). CUDA is not redistributed."
+            "- Licence: source code MIT; this build bundles GPL FFmpeg/x264, so the"
+            "  program is distributed under GPLv3. See licenses\NOTICE.txt."
           )
           $readme | Set-Content -Path "$pkg/README.txt" -Encoding UTF8
+
+          # Licence notice + GPL text (the bundled FFmpeg includes GPL x264)
+          New-Item -ItemType Directory -Force -Path "$pkg/licenses" | Out-Null
+          Copy-Item licenses/NOTICE.txt, licenses/GPL-3.0.txt "$pkg/licenses/"
+          Copy-Item LICENSE "$pkg/licenses/LICENSE-MIT.txt"
 
           $total = (Get-ChildItem $pkg -Recurse -File | Measure-Object Length -Sum).Sum
           Write-Host "Package files: $((Get-ChildItem $pkg -Recurse -File).Count)"

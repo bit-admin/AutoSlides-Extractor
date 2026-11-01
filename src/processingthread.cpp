@@ -251,6 +251,11 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         // Prepare output directory
         QString outputDir = createOutputDirectory(video->filePath, m_config.outputDirectory);
         video->outputDirectory = outputDir;  // Store for post-processing
+        if (m_config.writeTimeline) {
+            // Lets Slides Export find the audio for a video export later
+            TimelineMetadata::setSource(outputDir, QFileInfo(video->filePath).absoluteFilePath(),
+                                        videoInfo.duration, videoInfo.startTime);
+        }
         QFileInfo videoFileInfo(video->filePath);
         QString videoName = videoFileInfo.baseName();
         if (m_config.compatibleMode) videoName = stripScreenPrefix(videoName);

@@ -18,7 +18,11 @@
       "features": [
         "avcodec",
         "avformat",
-        "swscale"
+        "gpl",
+        "swresample",
+        "swscale",
+        "version3",
+        "x264"
       ]
     }
   ]
