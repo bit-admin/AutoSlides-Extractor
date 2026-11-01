@@ -38,6 +38,22 @@ struct PostProcessingResult {
 };
 
 /**
+ * @brief Pixel check that a pHash duplicate must also pass.
+ *
+ * pHash looks at a 64x64 thumbnail, so a slide that only gains a line of text
+ * (a step of a progressive reveal) can land within the Hamming threshold of the
+ * previous step. A pHash match is therefore only treated as a duplicate when
+ * the two images are also the same slide by the detector's own SSIM test.
+ * ssimThreshold <= 0 turns the check off (pHash alone decides).
+ */
+struct DuplicateSSIMCheck {
+    double ssimThreshold = 0.0;
+    bool enableDownsampling = true;
+    int downsampleWidth = 480;
+    int downsampleHeight = 270;
+};
+
+/**
  * @brief Post-processor for slide images
  *
  * Handles post-processing of extracted slide images including:
@@ -74,6 +90,7 @@ public:
      * @param mlPostCropDedup Candidate-only pHash recheck after successful auto-crops
      * @param autoCropConfig Detector settings for post-process auto-crop
      * @param jpegQuality JPEG quality for CropManager::applyCrop
+     * @param duplicateCheck SSIM check a pHash duplicate must also pass
      * @return PostProcessingResult with breakdown of removals
      */
     PostProcessingResult processDirectory(const QString& imageDir,
@@ -95,7 +112,8 @@ public:
                                          bool mlAutoCropMaybeSlides = false,
                                          bool mlPostCropDedup = false,
                                          const AutoCropConfig& autoCropConfig = AutoCropConfig(),
-                                         int jpegQuality = 95);
+                                         int jpegQuality = 95,
+                                         const DuplicateSSIMCheck& duplicateCheck = DuplicateSSIMCheck());
 
     /**
      * @brief Get list of images that were moved to trash
@@ -161,12 +179,14 @@ private:
      * @brief Find and remove duplicate images
      * @param imageHashes Map of file path to pHash
      * @param hammingThreshold Hamming distance threshold
+     * @param duplicateCheck SSIM check a pHash match must also pass
      * @param useApplicationTrash Use application trash instead of system trash
      * @param baseOutputDir Base output directory (for application trash)
      * @return List of files moved to trash
      */
     QStringList removeDuplicates(const QMap<QString, std::vector<uint8_t>>& imageHashes,
                                  int hammingThreshold,
+                                 const DuplicateSSIMCheck& duplicateCheck,
                                  bool useApplicationTrash,
                                  const QString& baseOutputDir);
 

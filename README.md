@@ -108,6 +108,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full release history.
 - Sorts folders naturally or uses custom ordering.
 - Exports one combined PDF or one PDF per selected folder.
 - Offers resize, aspect ratio, and JPEG quality controls when reducing file size.
+- Video mode rebuilds a folder as a small MP4 that follows its timeline, with the original audio copied or compressed (AAC or Opus), and one chapter per slide.
 
 ### Performance
 
@@ -123,7 +124,7 @@ Download release packages from the [GitHub Releases page](https://github.com/bit
 
 Available release assets may vary by version. In general:
 
-- **macOS**: use the `.dmg` package when provided.
+- **macOS**: Apple Silicon (arm64) only. Open `AutoSlides.Extractor-<version>-macOS-arm64.dmg` and drag **AutoSlides Extractor** onto the **Applications** link. The app is ad-hoc signed (not notarized), so clear the quarantine flag once after installing (see the Gatekeeper note below). Intel Macs can build from source.
 - **Windows**: use the installer or portable archive when provided. Prebuilt Windows packages use DirectML and CPU ONNX Runtime for hardware-accelerated ML inference without requiring CUDA drivers or external CUDA DLLs.
 - **Linux**: on Debian/Ubuntu, install the `.deb` with `sudo apt install ./AutoSlides.Extractor-<version>-Linux-x86_64.deb` (installs to `/opt/autoslides-extractor` and adds a menu entry and the `AutoSlidesExtractor` command). On other distributions, use the `.AppImage` (`chmod +x` it, then run it) or the portable `.tar.gz` (extract, then run `./AutoSlidesExtractor`). Prebuilt Linux packages target x86_64 CPUs with AVX2 and glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer), and use CPU ONNX Runtime. If the AppImage reports a FUSE error, install `libfuse2` or run it with `--appimage-extract-and-run`. Other systems can build from source.
 
@@ -139,7 +140,7 @@ sudo xattr -d com.apple.quarantine /Applications/AutoSlides\ Extractor.app
 
 | Component | Recommended |
 | --- | --- |
-| OS | macOS 11+, Windows 10+ x64, or a modern Linux distribution |
+| OS | macOS 13.4+ on Apple Silicon, Windows 10+ x64, or a modern Linux distribution |
 | CPU | Quad-core or better |
 | Memory | 8 GB minimum, 16 GB or more for long recordings |
 | Disk | Enough free space for extracted JPEGs, trash backups, crop backups, and PDFs |
@@ -540,7 +541,7 @@ For removed `ml_maybe_slide` items, Auto Crop first detects a valid slide area i
   <img src="docs/slides-export.png" alt="Slides Export PDF workflow" width="90%" />
 </p>
 
-Slides Export creates PDF documents from slide folders.
+Slides Export creates PDF documents or videos from slide folders. Use the **PDF** / **Video** switch at the top.
 
 ### Workflow
 
@@ -586,6 +587,42 @@ Suggested settings:
 | Best quality | Original size or 1080p, JPEG 85-95. |
 | Smaller classroom handout | 720p, JPEG 70-85. |
 | Very small archive | 480p, JPEG 50-70, verify readability. |
+
+### Video Mode
+
+Switch to **Video** at the top of Slides Export to turn each selected folder into a small MP4 that follows the folder's `timeline.json`. The result plays like the original recording, with the slide images instead of the screen capture, so you can still listen to the lecture.
+
+1. Click **Video** at the top of Slides Export.
+2. Select one or more folders. Folders without `timeline.json` are greyed out; extract them again with the timeline on.
+3. Check the **Audio Source** column. When the timeline recorded the original video and it still exists, it is filled in automatically. Use **Choose...** to pick the original video or any audio file, or **Clear** to export without audio.
+4. Choose the video and audio settings.
+5. Click **Make Video**. One folder asks for a file name; several folders ask for an output folder with one MP4 each.
+
+What is shown when:
+
+| Timeline state | On screen |
+| --- | --- |
+| Kept slide | That slide, from its change time until the next change. |
+| Duplicate (the lecturer went back to an earlier slide) | The kept copy of that earlier slide. |
+| Removed (ML "not a slide", exclusion list, manual trash) | The previous slide stays on screen. |
+
+Settings:
+
+| Setting | Options | Notes |
+| --- | --- | --- |
+| Resolution | Original, 1080p, 720p, 480p | Slides are never scaled up; other aspect ratios are letterboxed. |
+| Quality | High (CRF 18), Standard (CRF 23), Small (CRF 28) | H.264 quality. The picture is only about 1 MB for a 90-minute lecture. |
+| Repeat Frame | Off, 30 s, 1 min, 2 min, 5 min, 10 min | Shows the current slide again at this interval. Some players show the next frame after a seek; repeats keep them close. Off gives one frame per slide change. |
+| Audio | Copy original, Compress (AAC), Compress (Opus) | Copy keeps the source track unchanged. AAC plays everywhere. Opus is about a third of the size for the same speech quality; it plays in VLC, IINA, mpv, browsers, Windows and Android, but Apple's QuickTime Player and Photos may not play it. Audio that cannot go into MP4 is always re-encoded as AAC. |
+| Bitrate | AAC 16–128 kbps (default 48), Opus 8–48 kbps (default 16) | Decides most of the file size. For mono speech: AAC 32–48, Opus 12–16. |
+| Channels | Mono, Stereo | Compress only. |
+| Sample Rate | Original, 48–16 kHz | AAC only. Opus always runs at 48 kHz and picks its own bandwidth from the bitrate. |
+
+Each slide gets a chapter named after its PDF page number (**Slide 3** is page 3 of the PDF), so players with chapter support can jump between slides.
+
+Example: a 99-minute 1080p recording (249 MB) becomes about 10 MB with Opus 12 kbps, 14 MB with Opus 16 kbps, 38 MB with AAC 48 kbps, 47 MB with the original audio copied, or 1 MB without audio. Audio decides the size; the slide video itself is about 1 MB.
+
+Re-encoded audio follows the source's timestamps, like a player does: where the recorder dropped audio (common in screen recordings, about 3 s over that lecture), the export fills the hole with silence, so the voice stays in step with the slides.
 
 ## Command Line Guide
 
@@ -668,6 +705,9 @@ Common events:
 | `ml_started` | ML classification started with an execution provider. |
 | `ml_failed` | ML classifier failed to initialize or run. |
 | `post_complete` | Post-processing summary. |
+| `pdf_exported` | `--export-pdf` result: path, bytes, pages. |
+| `video_progress` | `--export-video` progress in percent. |
+| `video_exported` | `--export-video` result: path, bytes, duration, frames, chapters, audio. |
 | `done` | Whole run completed successfully. |
 | `cancelled` | SIGINT or SIGTERM cancellation completed. |
 | `error` | Structured error, usually written to stderr. |
@@ -700,6 +740,21 @@ Common events:
 | `--ml-autocrop-maybe` | flag | Auto-crop `may_be_slide` images before deletion and keep if crop succeeds. |
 | `--ml-postcrop-dedup` | flag | Re-check pHash duplicates after post-process auto-cropping. |
 | `--write-timeline` | flag | Write `timeline.json` media-time map in output slide folders. |
+| `--export-pdf` | flag | Also write `<output>/<name>.pdf` with the remaining slides, as Slides Export does. Not allowed with `--compatible`. |
+| `--pdf-reduce-size` | bool | Crop to `--pdf-aspect`, scale to `--pdf-height` and re-encode as JPEG. Default `true`; `false` keeps every image as-is. |
+| `--pdf-aspect` | ratio | `16:9` or `4:3`. Default `16:9`. |
+| `--pdf-height` | int | Page height in pixels, for example `1080`, `720`, `480`, `360`; `0` = original. Default `720`. |
+| `--pdf-jpeg-quality` | int | JPEG quality `1` to `100`. Default `50`. |
+| `--export-video` | flag | Also write `<output>/<name>.mp4`: the slides as a video following the timeline, with the input video's audio. Implies `--write-timeline`. |
+| `--video-height` | int | Video height in pixels, for example `1080`, `720`, `480`; `0` = slide size. Never scales slides up. Default `1080`. |
+| `--video-crf` | int | H.264 quality `0` to `51`, lower is better (`18` high, `23` standard, `28` small). Default `23`. |
+| `--video-repeat` | int | Repeat the current slide every N seconds; `0` = only at slide changes. Default `120`. |
+| `--video-audio` | mode | `aac`, `opus`, `copy`, or `none` (`compress` = `aac`). Default `aac`. |
+| `--video-audio-bitrate` | int | Bitrate in kbps: AAC `16` to `320` (default `48`), Opus `6` to `256` (default `16`). AAC/Opus only. |
+| `--video-audio-channels` | int | `1` (mono) or `2` (stereo). Default `1`. AAC/Opus only. |
+| `--video-audio-rate` | int | AAC sample rate in Hz, `8000` to `48000`; `0` = source rate (at most 48000). Default `0`. AAC only. |
+
+The `--pdf-*` and `--video-*` defaults are the Slides Export defaults. Export settings are not saved between runs.
 | `--compatible` | flag | Electron-compatible mode (PNG slides, no `screen_` prefix, skips post-processing). |
 | `--json` | flag | Emit JSON Lines events and suppress the progress bar. |
 | `--help` | flag | Print help. |
@@ -716,6 +771,8 @@ Boolean values accept `true`, `false`, `1`, `0`, `yes`, `no`, `on`, and `off`.
 | `3` | Bad input or output path. |
 | `4` | Video processing failed. |
 | `5` | Post-processing failed. |
+| `6` | Video export failed. |
+| `7` | PDF export failed. |
 | `130` | Cancelled by SIGINT, usually Ctrl-C. |
 | `143` | Cancelled by SIGTERM. |
 
@@ -763,6 +820,7 @@ When **Write timeline.json** is enabled (GUI default on; CLI opt-in via `--write
 
 - **Events**: Array of capture events recording I-frame PTS media times (`changeAt`, `confirmedAt`) and `initialFile` basename.
 - **Resolutions**: Mutable resolution map tracking slide states (`canonical`, `duplicate`, `gap`). Post-processing and manual review update resolution statuses (e.g. `duplicateOf`, `exclusion`, `ai_filtered`, `manual_trash`) rather than deleting events, maintaining a stable media timeline history.
+- **Source** (optional): `source.path`, `source.duration` and `source.startTime` of the video the slides came from. Slides Export uses it to find the audio for Video mode.
 
 ### Application Trash
 
@@ -833,7 +891,8 @@ Required:
 - C++17 compiler
 - Qt 6 Core, Widgets, Gui
 - OpenCV 4.x core, imgproc, imgcodecs
-- FFmpeg development libraries: libavcodec, libavformat, libavutil, libswscale
+- FFmpeg development libraries: libavcodec, libavformat, libavutil, libswscale, libswresample
+- For Video mode: an FFmpeg built with libx264 (`vcpkg.json` enables it); without it, another H.264 encoder is used if available. Opus audio needs libopus in FFmpeg (also enabled in `vcpkg.json`); without it the Opus choice is disabled
 
 Optional:
 
@@ -1029,7 +1088,9 @@ For screen recordings with desktop interruptions:
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+The source code is licensed under the [MIT License](LICENSE).
+
+Release builds bundle FFmpeg built with libx264 (for Video mode), which is GPL software, so the released programs are distributed under the [GNU GPL, version 3](licenses/GPL-3.0.txt). Each package includes a `licenses` folder with this notice, the GPL text, and where to get the corresponding source; see [licenses/NOTICE.txt](licenses/NOTICE.txt).
 
 ---
 

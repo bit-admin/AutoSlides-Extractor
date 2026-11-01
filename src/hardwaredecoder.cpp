@@ -119,6 +119,9 @@ bool HardwareDecoder::openVideo(const std::string& videoPath)
     } else {
         m_videoInfo.duration = 0.0;
     }
+    m_videoInfo.startTime = m_formatContext->start_time != AV_NOPTS_VALUE
+        ? (double)m_formatContext->start_time / AV_TIME_BASE
+        : 0.0;
 
     // Calculate frame rate
     AVRational frameRate = m_formatContext->streams[m_videoStreamIndex]->r_frame_rate;
@@ -522,11 +525,45 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
     avcodec_flush_buffers(m_codecContext);
 
     int totalFrameCount = 0;
-    int iFrameCount = 0;
     bool skipNext = false;
     std::vector<cv::Mat> currentChunk;
     std::vector<double> currentTimestamps;
     int chunkStartOffset = 0;
+    double lastTimestamp = 0.0;
+
+    auto onFrame = [&](AVFrame* frame) {
+        cv::Mat mat;
+        if (!convertFrameToMat(frame, mat)) {
+            return;
+        }
+
+        // Use the decoded frame's own timestamp: with decoder delay the packet
+        // just sent is not the frame that came out.
+        double timestamp = frameTimestampSeconds(frame);
+        if (timestamp < 0.0) {
+            timestamp = lastTimestamp;
+        }
+        lastTimestamp = timestamp;
+
+        // A full chunk is only handed over once another frame exists, so the
+        // final chunk is always the one flagged isLastChunk (even when the
+        // frame count is an exact multiple of chunkSize).
+        if (currentChunk.size() >= static_cast<size_t>(chunkSize)) {
+            chunkCallback(currentChunk, currentTimestamps, chunkStartOffset, false);
+            chunkStartOffset = totalFrameCount;
+            currentChunk.clear();
+            currentTimestamps.clear();
+        }
+
+        currentChunk.push_back(std::move(mat));
+        currentTimestamps.push_back(timestamp);
+        totalFrameCount++;
+
+        if (progressCallback && m_videoInfo.duration > 0) {
+            double progress = std::min(100.0, (timestamp / m_videoInfo.duration) * 100.0);
+            progressCallback(timestamp, m_videoInfo.duration, progress);
+        }
+    };
 
     while (true) {
         // Check for cancellation before reading next frame
@@ -544,71 +581,28 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
             }
             break; // EOF or error
         }
-        if (m_packet->stream_index == m_videoStreamIndex) {
-            // Check if this is an I-frame
-            bool isIFrame = (m_packet->flags & AV_PKT_FLAG_KEY);
+        if (m_packet->stream_index == m_videoStreamIndex && (m_packet->flags & AV_PKT_FLAG_KEY)) {
+            // Apply sampling strategy
+            bool shouldDecode = true;
+            if (m_samplingStrategy == SamplingStrategy::SkipEveryOtherI) {
+                shouldDecode = !skipNext;
+                skipNext = !skipNext;
+            }
 
-            if (isIFrame) {
-                // Apply sampling strategy
-                bool shouldDecode = true;
-
-                switch (m_samplingStrategy) {
-                    case SamplingStrategy::SkipEveryOtherI:
-                        shouldDecode = !skipNext;
-                        skipNext = !skipNext;
-                        break;
-                    case SamplingStrategy::UseAllIFrames:
-                    case SamplingStrategy::UseAllIFramesWarn:
-                        shouldDecode = true;
-                        break;
-                }
-
-                if (shouldDecode) {
-                    // Decode the I-frame
-                    if (avcodec_send_packet(m_codecContext, m_packet) >= 0) {
-                        AVFrame* targetFrame = m_useHardwareAcceleration ? m_hwFrame : m_frame;
-
-                        if (avcodec_receive_frame(m_codecContext, targetFrame) >= 0) {
-                            cv::Mat mat;
-
-                            if (convertFrameToMat(targetFrame, mat)) {
-                                // Media PTS seconds for this sampled I-frame
-                                double timestamp = 0.0;
-                                if (m_packet->pts != AV_NOPTS_VALUE) {
-                                    timestamp = (double)m_packet->pts *
-                                        av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
-                                }
-
-                                // Add frame + timestamp to current chunk
-                                currentChunk.push_back(mat);
-                                currentTimestamps.push_back(timestamp);
-
-                                // Progress callback
-                                if (progressCallback && m_videoInfo.duration > 0) {
-                                    double progress = (timestamp / m_videoInfo.duration) * 100.0;
-                                    progressCallback(timestamp, m_videoInfo.duration, progress);
-                                }
-
-                                totalFrameCount++;
-
-                                // Check if chunk is full
-                                if (currentChunk.size() >= static_cast<size_t>(chunkSize)) {
-                                    // Call chunk callback with current chunk
-                                    chunkCallback(currentChunk, currentTimestamps, chunkStartOffset, false);
-
-                                    // Prepare for next chunk
-                                    chunkStartOffset = totalFrameCount;
-                                    currentChunk.clear();
-                                    currentTimestamps.clear();
-                                }
-                            }
-                        }
-                    }
-                }
-                iFrameCount++;
+            if (shouldDecode) {
+                sendPacketAndDrain(m_packet, onFrame);
             }
         }
         av_packet_unref(m_packet);
+    }
+
+    // Flush frames still buffered inside the decoder (otherwise the last
+    // keyframes of the video are silently lost).
+    sendPacketAndDrain(nullptr, onFrame);
+
+    if (m_shouldCancel) {
+        m_lastError = "Operation cancelled by user";
+        return -1;
     }
 
     // Handle remaining frames in the last chunk
@@ -619,6 +613,51 @@ int HardwareDecoder::extractFramesInChunks(const ChunkReadyCallback& chunkCallba
     return totalFrameCount;
 }
 
+bool HardwareDecoder::sendPacketAndDrain(const AVPacket* packet, const std::function<void(AVFrame*)>& onFrame)
+{
+    AVFrame* targetFrame = m_useHardwareAcceleration ? m_hwFrame : m_frame;
+
+    int ret = avcodec_send_packet(m_codecContext, packet);
+    while (ret == AVERROR(EAGAIN)) {
+        // Decoder output is full: read frames out, then retry the send
+        bool drained = false;
+        while (avcodec_receive_frame(m_codecContext, targetFrame) >= 0) {
+            onFrame(targetFrame);
+            drained = true;
+        }
+        if (!drained) {
+            break;
+        }
+        ret = avcodec_send_packet(m_codecContext, packet);
+    }
+    if (ret < 0 && ret != AVERROR_EOF) {
+        return false;
+    }
+
+    while (true) {
+        ret = avcodec_receive_frame(m_codecContext, targetFrame);
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            return true;
+        }
+        if (ret < 0) {
+            return false;
+        }
+        onFrame(targetFrame);
+    }
+}
+
+double HardwareDecoder::frameTimestampSeconds(const AVFrame* frame) const
+{
+    int64_t ts = frame->best_effort_timestamp;
+    if (ts == AV_NOPTS_VALUE) {
+        ts = frame->pts;
+    }
+    if (ts == AV_NOPTS_VALUE) {
+        return -1.0;
+    }
+    return static_cast<double>(ts) * av_q2d(m_formatContext->streams[m_videoStreamIndex]->time_base);
+}
+
 bool HardwareDecoder::convertFrameToMat(AVFrame* frame, cv::Mat& mat)
 {
     if (!frame) {
@@ -627,47 +666,32 @@ bool HardwareDecoder::convertFrameToMat(AVFrame* frame, cv::Mat& mat)
 
     AVFrame* sourceFrame = frame;
 
-    // If using hardware acceleration, transfer frame to system memory
-    if (m_useHardwareAcceleration && frame->format != AV_PIX_FMT_YUV420P) {
+    // Hardware surfaces must be copied to system memory first. Decide by the
+    // frame itself: a hardware decoder can still return software frames.
+    if (frame->hw_frames_ctx) {
+        av_frame_unref(m_frame);
         if (av_hwframe_transfer_data(m_frame, frame, 0) < 0) {
             return false;
         }
         sourceFrame = m_frame;
     }
 
-    // Setup conversion context if needed
+    // Re-created automatically if the size or pixel format changes mid-stream
+    m_swsContext = sws_getCachedContext(
+        m_swsContext,
+        sourceFrame->width, sourceFrame->height, (AVPixelFormat)sourceFrame->format,
+        sourceFrame->width, sourceFrame->height, AV_PIX_FMT_BGR24,
+        SWS_BILINEAR, nullptr, nullptr, nullptr);
     if (!m_swsContext) {
-        m_swsContext = sws_getContext(
-            sourceFrame->width, sourceFrame->height, (AVPixelFormat)sourceFrame->format,
-            sourceFrame->width, sourceFrame->height, AV_PIX_FMT_BGR24,
-            SWS_BILINEAR, nullptr, nullptr, nullptr
-        );
-
-        if (!m_swsContext) {
-            return false;
-        }
-
-        // Allocate buffer for RGB frame
-        m_bufferSize = av_image_get_buffer_size(AV_PIX_FMT_BGR24, sourceFrame->width, sourceFrame->height, 1);
-        m_buffer = (uint8_t*)av_malloc(m_bufferSize);
-
-        if (!m_buffer) {
-            return false;
-        }
-
-        av_image_fill_arrays(m_frameRGB->data, m_frameRGB->linesize, m_buffer,
-                           AV_PIX_FMT_BGR24, sourceFrame->width, sourceFrame->height, 1);
+        return false;
     }
 
-    // Convert frame to BGR24
+    // Convert straight into the Mat's own buffer (no intermediate copy)
+    mat.create(sourceFrame->height, sourceFrame->width, CV_8UC3);
+    uint8_t* dstData[4] = { mat.data, nullptr, nullptr, nullptr };
+    int dstLinesize[4] = { static_cast<int>(mat.step[0]), 0, 0, 0 };
     sws_scale(m_swsContext, sourceFrame->data, sourceFrame->linesize, 0, sourceFrame->height,
-              m_frameRGB->data, m_frameRGB->linesize);
-
-    // Create OpenCV Mat with zero-copy (data is not copied, just wrapped)
-    mat = cv::Mat(sourceFrame->height, sourceFrame->width, CV_8UC3, m_frameRGB->data[0], m_frameRGB->linesize[0]);
-
-    // Clone the mat to ensure data persistence after frame is reused
-    mat = mat.clone();
+              dstData, dstLinesize);
 
     return true;
 }
@@ -689,8 +713,8 @@ bool HardwareDecoder::convertFrameToFrameBuffer(AVFrame* frame, FrameBuffer& fra
     }
 
     // Setup conversion context if needed
-    if (!m_swsContext) {
-        m_swsContext = sws_getContext(
+    if (!m_swsContext || !m_buffer) {
+        m_swsContext = sws_getCachedContext(m_swsContext,
             sourceFrame->width, sourceFrame->height, (AVPixelFormat)sourceFrame->format,
             sourceFrame->width, sourceFrame->height, AV_PIX_FMT_BGR24,
             SWS_BILINEAR, nullptr, nullptr, nullptr

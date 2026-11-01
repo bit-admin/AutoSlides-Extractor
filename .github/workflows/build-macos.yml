@@ -1,0 +1,373 @@
+# Build + package AutoSlides Extractor for macOS arm64 (Apple Silicon) as a .dmg.
+#
+# Mirrors build-linux.yml / build-windows.yml:
+#   - same pinned vcpkg + vcpkg.json (minimal OpenCV/FFmpeg features). Homebrew is
+#     not used for libraries: its bottles target the runner's macOS version and
+#     pull a large dependency tree.
+#   - arm64-osx-dynamic-release overlay triplet (installer/vcpkg-triplets): dylibs
+#     next to the app (FFmpeg with x264, GPLv3; see README "License"), release only,
+#     deployment target pinned to MACOS_DEPLOYMENT_TARGET
+#   - packaging lives in installer/package-macos.sh: deps are discovered from the
+#     built binary; unresolved, external or Homebrew libraries fail the build
+#   - version comes from CMakeLists.txt
+#
+# macOS specifics:
+#   - macos-15 runners are Apple Silicon; arm64 only (no Intel / universal build)
+#   - Qt from the official installer is universal; the package script thins it
+#   - ONNX Runtime osx-arm64 package (includes the Core ML execution provider)
+#   - ad-hoc signed (no Developer ID). LSMinimumSystemVersion is the highest
+#     minimum found among the bundled binaries (Qt / ONNX Runtime may raise it).
+#   - Homebrew stays out of the build: CMake ignores its prefixes, pkg-config only
+#     sees the vcpkg .pc files, and ffmpeg (for the smoke video) is only
+#     installed after packaging.
+#
+# Artifact:
+#   AutoSlides.Extractor-<ver>-macOS-arm64.dmg   (LZMA / UDIF "ULMO")
+# Draft release (push to main / workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
+#
+# Caching (restore early, SAVE right after each success so a later failure
+# does not throw away a cold FFmpeg/OpenCV compile):
+#   - Qt: install-qt-action
+#   - vcpkg-bincache (files layer), ONNX vendor
+
+name: Build macOS Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: macos-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # Do NOT cancel an in-progress first-time vcpkg compile (see build-windows.yml).
+  cancel-in-progress: false
+
+permissions:
+  # contents:write required for softprops/action-gh-release when using github.token.
+  contents: write
+
+env:
+  QT_VERSION: "6.8.3"
+  ONNXRUNTIME_VERSION: "1.23.2"
+  # Folder name matches the CMakeLists vendor lookup for Apple arm64.
+  ONNX_PACKAGE: "onnxruntime-osx-arm64"
+  # Same pin as build-windows.yml / build-linux.yml. Bump intentionally.
+  VCPKG_COMMIT: "2026.07.29"
+  VCPKG_TRIPLET: "arm64-osx-dynamic-release"
+  VCPKG_OVERLAY_TRIPLETS: "${{ github.workspace }}/installer/vcpkg-triplets"
+  VCPKG_ROOT: "/Users/runner/vcpkg"
+  VCPKG_DISABLE_METRICS: "1"
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
+  # Keep in sync with VCPKG_OSX_DEPLOYMENT_TARGET in the overlay triplet.
+  MACOS_DEPLOYMENT_TARGET: "12.0"
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+jobs:
+  build-macos:
+    runs-on: macos-15
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Read app version from CMakeLists.txt
+        id: version
+        run: |
+          ver="$(sed -nE 's/^project\(AutoSlidesExtractor VERSION ([0-9.]+).*/\1/p' CMakeLists.txt)"
+          [ -n "$ver" ] || { echo "::error::Could not parse project VERSION from CMakeLists.txt"; exit 1; }
+          echo "APP_VERSION=$ver"
+          echo "APP_VERSION=$ver" >> "$GITHUB_ENV"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Check triplet deployment target matches workflow
+        run: |
+          t="$(sed -nE 's/^set\(VCPKG_OSX_DEPLOYMENT_TARGET ([0-9.]+)\)/\1/p' "$VCPKG_OVERLAY_TRIPLETS/$VCPKG_TRIPLET.cmake")"
+          [ "$t" = "$MACOS_DEPLOYMENT_TARGET" ] \
+            || { echo "::error::triplet deployment target '$t' != MACOS_DEPLOYMENT_TARGET '$MACOS_DEPLOYMENT_TARGET'"; exit 1; }
+
+      # Build tools only (vcpkg ports need pkg-config; CMake generator is Ninja).
+      - name: Install build tools
+        run: |
+          brew install ninja pkgconf
+          cmake --version | head -1
+          xcrun clang --version | head -1
+
+      - name: Install Qt (qtbase + qtsvg only)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: "mac"
+          target: "desktop"
+          arch: "clang_64"
+          # Core/Gui/Widgets + macdeployqt live in qtbase; qtsvg covers the icon engine.
+          archives: "qtbase qtsvg"
+          cache: true
+          cache-key-prefix: "qt-${{ env.QT_VERSION }}-mac-clang64-base-svg"
+
+      - name: Restore vcpkg binary packages
+        id: restore-vcpkg-bin
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          # Cache entries are immutable, so each run that builds packages saves a
+          # new entry (run id suffix) and later runs restore the newest one.
+          # No compiler version in the key: vcpkg's own ABI hashes decide what
+          # is reusable, and one entry can hold packages for several runner images.
+          key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
+          # Same manifest first; else any entry for this vcpkg + triplet, so a
+          # vcpkg.json change rebuilds only what changed (vcpkg's ABI hashes decide
+          # what is reusable; the prune step drops what stays unused). To force a
+          # cold build, rename the vcpkg-bin prefix in the key and restore-keys.
+          restore-keys: |
+            vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-
+            vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-
+
+      - name: Setup vcpkg (pinned)
+        run: |
+          # No builtin-baseline in vcpkg.json, so a shallow checkout of the tag is enough.
+          git clone --depth 1 --branch "$VCPKG_COMMIT" https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          "$VCPKG_ROOT/vcpkg" version
+          mkdir -p "$GITHUB_WORKSPACE/vcpkg-bincache"
+
+      - name: Install vcpkg dependencies
+        id: vcpkg-install
+        run: |
+          echo "This step compiles OpenCV/FFmpeg on a cold cache (can take a long time)."
+          log="$RUNNER_TEMP/vcpkg-install.log"
+          set -o pipefail
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet "$VCPKG_TRIPLET" \
+            --overlay-triplets="$VCPKG_OVERLAY_TRIPLETS" \
+            --x-manifest-root=. \
+            --x-install-root=build/vcpkg_installed 2>&1 | tee "$log"
+          # Did we compile anything from source? If yes, the bincache has new packages.
+          if grep -qE '^Building [^ ]+@' "$log"; then
+            echo "did_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "did_build=false" >> "$GITHUB_OUTPUT"
+          fi
+          ls "build/vcpkg_installed/$VCPKG_TRIPLET/lib"
+
+      # Keep the archives this run used (their ABI hashes are in the installed
+      # status file) plus anything built in the last 14 days (e.g. the other
+      # runner image while GitHub rolls out a new one); drop the rest so the
+      # cache does not grow with every image update.
+      - name: Prune vcpkg binary cache
+        if: success() && steps.vcpkg-install.outputs.did_build == 'true'
+        run: |
+          used="$RUNNER_TEMP/vcpkg-used-abis.txt"
+          sed -n 's/^Abi: //p' build/vcpkg_installed/vcpkg/status | sort -u > "$used"
+          echo "packages in use: $(wc -l < "$used")"
+          find "$GITHUB_WORKSPACE/vcpkg-bincache" -type f -name '*.zip' -mtime +14 | while read -r f; do
+            if ! grep -qx "$(basename "$f" .zip)" "$used"; then
+              echo "prune $(basename "$f")"
+              rm -f "$f"
+            fi
+          done
+          echo "archives kept: $(find "$GITHUB_WORKSPACE/vcpkg-bincache" -type f -name '*.zip' | wc -l)"
+          du -sh "$GITHUB_WORKSPACE/vcpkg-bincache"
+
+      # Save right away (survives later failures) whenever anything was built.
+      - name: Save vcpkg binary package cache
+        if: success() && steps.vcpkg-install.outputs.did_build == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-bincache
+          key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
+
+      - name: Restore ONNX Runtime
+        id: restore-onnx
+        uses: actions/cache/restore@v4
+        with:
+          path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+
+      - name: Download ONNX Runtime (osx-arm64, Core ML)
+        if: steps.restore-onnx.outputs.cache-hit != 'true'
+        run: |
+          name="$ONNX_PACKAGE-$ONNXRUNTIME_VERSION"
+          url="https://github.com/microsoft/onnxruntime/releases/download/v$ONNXRUNTIME_VERSION/$name.tgz"
+          echo "Downloading $url"
+          mkdir -p vendor
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tgz" "$url"
+          tar -xzf "$RUNNER_TEMP/$name.tgz" -C vendor
+          rm -f "$RUNNER_TEMP/$name.tgz"
+
+      - name: Verify ONNX Runtime present
+        run: |
+          lib="vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib/libonnxruntime.$ONNXRUNTIME_VERSION.dylib"
+          [ -f "$lib" ] || { echo "::error::$lib missing after cache/download"; exit 1; }
+          lipo -archs "$lib" | grep -qw arm64 || { echo "::error::$lib has no arm64 slice"; exit 1; }
+          otool -l "$lib" | grep -A3 LC_BUILD_VERSION | grep minos || true
+          ls -la "vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib"
+
+      - name: Save ONNX Runtime cache
+        if: success() && steps.restore-onnx.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+
+      - name: Configure CMake
+        run: |
+          set -o pipefail
+          # pkg-config may only see vcpkg's .pc files (not Homebrew's).
+          export PKG_CONFIG_LIBDIR="$GITHUB_WORKSPACE/build/vcpkg_installed/$VCPKG_TRIPLET/lib/pkgconfig"
+          # CMAKE_IGNORE_PREFIX_PATH keeps find_package/find_library away from
+          # Homebrew/usr-local libraries (tools on PATH such as ninja still resolve).
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
+            -DVCPKG_OVERLAY_TRIPLETS="$VCPKG_OVERLAY_TRIPLETS" \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/build/vcpkg_installed" \
+            -DVCPKG_MANIFEST_INSTALL=OFF \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET" 2>&1 | tee "$RUNNER_TEMP/configure.log"
+
+          # Fail if Homebrew OpenCV/FFmpeg or a non-vendor ONNX Runtime was picked up.
+          cache=build/CMakeCache.txt
+          grep -E '^(OpenCV_DIR|FFMPEG_libavcodec_LIBDIR|CMAKE_OSX_)' "$cache" || true
+          grep -qE "^OpenCV_DIR:.*vcpkg_installed/$VCPKG_TRIPLET" "$cache" \
+            || { echo "::error::OpenCV not resolved from vcpkg"; exit 1; }
+          grep -qE "^FFMPEG_libavcodec_LIBDIR:.*vcpkg_installed/$VCPKG_TRIPLET" "$cache" \
+            || { echo "::error::FFmpeg not resolved from vcpkg"; exit 1; }
+          grep -q "Using vendor ONNX Runtime with Core ML support" "$RUNNER_TEMP/configure.log" \
+            || { echo "::error::vendor ONNX Runtime (Core ML) not used"; exit 1; }
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      # dmgbuild writes the DMG window layout (background, icon positions) without
+      # driving Finder; installed in a venv so it cannot touch the build.
+      - name: Install dmgbuild
+        run: |
+          # 1.6.7+: older versions write a background bookmark that makes Finder on
+          # macOS 26.2+ show no background. Needs Python 3.10+.
+          python3 -c 'import sys; assert sys.version_info >= (3, 10), sys.version' \
+            || { echo "::error::dmgbuild needs Python 3.10+, found $(python3 --version)"; exit 1; }
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --disable-pip-version-check dmgbuild==1.6.7
+          echo "DMGBUILD=$RUNNER_TEMP/dmgbuild/bin/dmgbuild" >> "$GITHUB_ENV"
+
+      - name: Package app + DMG
+        run: |
+          QT_PATH="$QT_ROOT_DIR" \
+          LIB_DIRS="$GITHUB_WORKSPACE/build/vcpkg_installed/$VCPKG_TRIPLET/lib" \
+            installer/package-macos.sh build
+
+      # Test the DMG itself: mount it read-only and run the app from the image on a
+      # synthetic three-slide H.264 video, then check the GUI starts.
+      # ffmpeg is installed only now, after packaging, so it cannot leak into the build.
+      - name: Verify DMG
+        run: |
+          set -euo pipefail
+          dmg="$PWD/build/AutoSlides.Extractor-$APP_VERSION-macOS-arm64.dmg"
+          [ -f "$dmg" ] || { echo "::error::$dmg not produced"; exit 1; }
+          hdiutil imageinfo "$dmg" | grep -E '^Format:' || true
+
+          mnt="$(mktemp -d)"
+          hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mnt"
+          trap 'hdiutil detach "$mnt" -force >/dev/null 2>&1 || true' EXIT
+          app="$mnt/AutoSlides Extractor.app"
+          exe="$app/Contents/MacOS/AutoSlidesExtractor"
+          [ -L "$mnt/Applications" ] || { echo "::error::/Applications link missing in DMG"; exit 1; }
+          [ -f "$mnt/.DS_Store" ] && [ -f "$mnt/.background.tiff" ] \
+            || { echo "::error::DMG window layout (.DS_Store / .background.tiff) missing"; exit 1; }
+          # A background bookmark (pBBk) makes Finder on macOS 26.2+ show no background
+          ! grep -q pBBk "$mnt/.DS_Store" \
+            || { echo "::error::.DS_Store has a pBBk background bookmark (dmgbuild < 1.6.7?)"; exit 1; }
+          [ ! -e "$mnt/install.command" ] || { echo "::error::install.command should not ship"; exit 1; }
+          codesign --verify --deep --strict --verbose=1 "$app"
+          /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist"
+          lipo -archs "$exe"
+          "$exe" --version
+
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          work="$RUNNER_TEMP/smoke"
+          rm -rf "$work" && mkdir -p "$work" && cd "$work"
+          # Three static "slides", 12 s each, I-frame every 2 s, with a tone as audio.
+          ffmpeg -loglevel error \
+                 -f lavfi -i "smptebars=s=1280x720:r=30:d=12" \
+                 -f lavfi -i "rgbtestsrc=s=1280x720:r=30:d=12" \
+                 -f lavfi -i "color=c=0x1f3a68:s=1280x720:r=30:d=12" \
+                 -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=36" \
+                 -filter_complex "[0:v][1:v][2:v]concat=n=3:v=1,format=yuv420p[v]" \
+                 -map "[v]" -map 3:a -c:v libx264 -g 60 -c:a aac -b:a 96k lecture.mp4
+          "$exe" --video lecture.mp4 --output out --json --phash-redundant --ml-classify --write-timeline \
+            --export-pdf --export-video --video-audio aac | tee events.ndjson
+          done_line="$(grep '"event":"done"' events.ndjson)"
+          echo "$done_line" | grep -q '"exitCode":0' || { echo "::error::CLI smoke test failed"; exit 1; }
+          count="$(echo "$done_line" | sed -E 's/.*"slideCount":([0-9]+).*/\1/')"
+          [ "$count" -ge 2 ] || { echo "::error::expected >= 2 slides, got $count"; exit 1; }
+          [ -f out/slides_lecture/timeline.json ] || { echo "::error::timeline.json missing"; exit 1; }
+
+          grep -q '"event":"pdf_exported"' events.ndjson && [ -s out/lecture.pdf ] \
+            || { echo "::error::PDF export missing"; exit 1; }
+          # Video export: H.264 + AAC, full length, chapters for the slides left
+          # after ML (which may remove the colour-bar / solid-colour test slides).
+          grep '"event":"video_exported"' events.ndjson || { echo "::error::video export missing"; exit 1; }
+          ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 out/lecture.mp4 | tee streams.txt
+          grep -q '^h264,video' streams.txt || { echo "::error::exported video has no H.264 track"; exit 1; }
+          grep -q '^aac,audio' streams.txt || { echo "::error::exported video has no AAC track"; exit 1; }
+          dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 out/lecture.mp4)"
+          awk -v d="$dur" 'BEGIN { exit !(d > 34 && d < 38) }' || { echo "::error::exported duration $dur, expected ~36 s"; exit 1; }
+          chapters="$(ffprobe -v error -show_chapters -of csv=p=0 out/lecture.mp4 | wc -l | tr -d ' ')"
+          [ "$chapters" -ge 1 ] || { echo "::error::expected >= 1 chapter, got $chapters"; exit 1; }
+
+          # Opus audio (libopus in the bundled FFmpeg), at the lowest suggested bitrate
+          "$exe" --video lecture.mp4 --output out-opus --json --write-timeline \
+            --export-video --video-audio opus --video-audio-bitrate 12 > opus.ndjson
+          grep '"event":"video_exported"' opus.ndjson || { cat opus.ndjson; echo "::error::Opus video export failed"; exit 1; }
+          ffprobe -v error -show_entries stream=codec_name,codec_type -of csv=p=0 out-opus/lecture.mp4 | tee streams-opus.txt
+          grep -q '^opus,audio' streams-opus.txt || { echo "::error::exported video has no Opus track"; exit 1; }
+          dur="$(ffprobe -v error -show_entries format=duration -of csv=p=0 out-opus/lecture.mp4)"
+          awk -v d="$dur" 'BEGIN { exit !(d > 34 && d < 38) }' || { echo "::error::Opus export duration $dur, expected ~36 s"; exit 1; }
+          # Informational: VMs may not expose hardware decoding, so this is not a gate.
+          grep -o 'Decoder: [A-Za-z0-9_]*' events.ndjson || true
+
+          # GUI: still running after a few seconds == cocoa plugin + main window OK.
+          "$exe" > gui.log 2>&1 &
+          pid=$!
+          sleep 10
+          if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid"; wait "$pid" 2>/dev/null || true
+          else
+            cat gui.log
+            echo "::error::GUI exited early"; exit 1
+          fi
+          cat gui.log
+          echo "Verify OK"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-macOS-arm64
+          path: build/AutoSlides.Extractor-*-macOS-arm64.dmg
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+      # Draft GitHub Release, same tag as the Windows/Linux workflows so all
+      # platforms' assets land on one draft. Only from main or a manual run.
+      - name: Create draft release
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-macOS-arm64.dmg

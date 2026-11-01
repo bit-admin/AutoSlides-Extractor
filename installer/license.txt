@@ -1,3 +1,13 @@
+AutoSlides Extractor
+
+The source code is MIT-licensed (below). This build also bundles FFmpeg with
+libx264 (used for video export), which is GPL software, so the program as
+installed is distributed under the GNU General Public License, version 3.
+The full GPL text, the licences of all bundled components and where to get
+the corresponding source are in the "licenses" folder of the installation.
+
+------------------------------------------------------------------------------
+
 MIT License
 
 Copyright (c) 2025 bit-admin

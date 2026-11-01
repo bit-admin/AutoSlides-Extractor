@@ -108,6 +108,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 - 支持自然排序和自定义顺序。
 - 支持一个合并 PDF 或每个文件夹一个 PDF。
 - 减小文件大小时可控制宽高比、缩放尺寸和 JPEG 质量。
+- 视频模式可按时间线把文件夹重建为小体积 MP4，可复制或压缩原音轨（AAC 或 Opus），每张幻灯片一个章节。
 
 ### 性能
 
@@ -123,7 +124,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 
 不同版本的发布资产可能不同，通常包括：
 
-- **macOS**：优先使用 `.dmg` 安装包。
+- **macOS**：仅支持 Apple Silicon（arm64）。打开 `AutoSlides.Extractor-<版本>-macOS-arm64.dmg`，将 **AutoSlides Extractor** 拖到 **Applications**（应用程序）链接上。应用为 ad-hoc 签名（未经公证），安装后需清除一次隔离属性（见下方 Gatekeeper 提示）。Intel Mac 可从源码构建。
 - **Windows**：使用安装器或便携压缩包。预构建 Windows 发布包采用 DirectML 和 CPU ONNX Runtime 提供 GPU 硬件加速，无需额外安装或捆绑 CUDA 驱动与 DLL。
 - **Linux**：Debian/Ubuntu 可使用 `sudo apt install ./AutoSlides.Extractor-<版本>-Linux-x86_64.deb` 安装 `.deb`（安装到 `/opt/autoslides-extractor`，并添加菜单项与 `AutoSlidesExtractor` 命令）。其他发行版使用 `.AppImage`（先 `chmod +x` 再运行）或便携 `.tar.gz`（解压后运行 `./AutoSlidesExtractor`）。预构建 Linux 发布包面向支持 AVX2 的 x86_64 CPU 与 glibc 2.35+（Ubuntu 22.04、Debian 12、Fedora 36 或更新版本），使用 CPU ONNX Runtime。如果 AppImage 提示 FUSE 错误，请安装 `libfuse2`，或使用 `--appimage-extract-and-run` 运行。其他系统可从源码构建。
 
@@ -139,7 +140,7 @@ sudo xattr -d com.apple.quarantine /Applications/AutoSlides\ Extractor.app
 
 | 项目 | 建议 |
 | --- | --- |
-| 操作系统 | macOS 11+、Windows 10+ x64，或现代 Linux 发行版 |
+| 操作系统 | macOS 13.4+（Apple Silicon）、Windows 10+ x64，或现代 Linux 发行版 |
 | CPU | 四核或更高 |
 | 内存 | 最低 8 GB，长视频建议 16 GB 或更多 |
 | 磁盘 | 需要为 JPEG、应用垃圾箱、裁剪备份和 PDF 留出空间 |
@@ -540,7 +541,7 @@ Baseline Crop 适合整节课都带有相同窗口边框或黑边的情况。
   <img src="docs/slides-export.png" alt="Slides Export PDF 工作流" width="90%" />
 </p>
 
-Slides Export 用于从幻灯片文件夹生成 PDF。
+Slides Export 用于从幻灯片文件夹生成 PDF 或视频。使用顶部的 **PDF** / **Video** 切换。
 
 ### 工作流
 
@@ -586,6 +587,42 @@ Slides Export 用于从幻灯片文件夹生成 PDF。
 | 最佳质量 | 原始尺寸或 1080p，JPEG 85-95。 |
 | 课堂讲义 | 720p，JPEG 70-85。 |
 | 极小文件 | 480p，JPEG 50-70，并确认文字可读。 |
+
+### 视频模式
+
+在 Slides Export 顶部切换到 **Video**，即可把每个所选文件夹按其 `timeline.json` 生成一个小体积 MP4。生成的视频与原录屏时间一致，只是画面换成提取出的幻灯片图片，仍然可以听讲课声音。
+
+1. 点击 Slides Export 顶部的 **Video**。
+2. 选择一个或多个文件夹。没有 `timeline.json` 的文件夹会显示为灰色，需开启时间线后重新提取。
+3. 检查 **Audio Source** 列。若时间线记录了原视频且文件仍存在，会自动填入。点击 **Choose...** 选择原视频或任意音频文件，点击 **Clear** 则导出无声视频。
+4. 选择视频和音频设置。
+5. 点击 **Make Video**。只选一个文件夹时选择文件名；选择多个文件夹时选择输出文件夹，每个文件夹生成一个 MP4。
+
+各时间段显示的内容：
+
+| 时间线状态 | 画面 |
+| --- | --- |
+| 保留的幻灯片 | 从该幻灯片的切换时间显示到下一次切换。 |
+| 重复（老师切回之前的幻灯片） | 显示之前保留的那一张。 |
+| 已移除（ML 判定非幻灯片、排除列表、手动删除） | 继续显示上一张幻灯片。 |
+
+设置：
+
+| 设置 | 选项 | 说明 |
+| --- | --- | --- |
+| Resolution | Original、1080p、720p、480p | 不会放大幻灯片；宽高比不同的图片会加黑边。 |
+| Quality | High (CRF 18)、Standard (CRF 23)、Small (CRF 28) | H.264 画质。90 分钟课程的画面部分约 1 MB。 |
+| Repeat Frame | Off、30 s、1 min、2 min、5 min、10 min | 按此间隔重复当前幻灯片。部分播放器跳转后会显示下一帧，重复帧可让误差保持在该间隔内。Off 表示每次切换只有一帧。 |
+| Audio | Copy original、Compress (AAC)、Compress (Opus) | Copy 原样保留音轨。AAC 到处都能播放。Opus 在相同语音质量下体积约为 AAC 的三分之一；VLC、IINA、mpv、浏览器、Windows 和 Android 都能播放，但 Apple 的 QuickTime Player 和“照片”可能无法播放。无法放入 MP4 的音频会自动重新编码为 AAC。 |
+| Bitrate | AAC 16–128 kbps（默认 48）、Opus 8–48 kbps（默认 16） | 决定文件大小的主要因素。单声道语音：AAC 32–48，Opus 12–16。 |
+| Channels | Mono、Stereo | 仅用于压缩。 |
+| Sample Rate | Original、48–16 kHz | 仅用于 AAC。Opus 固定以 48 kHz 运行，并根据码率自行选择带宽。 |
+
+每张幻灯片对应一个章节，名称为其 PDF 页码（**Slide 3** 即 PDF 第 3 页），支持章节的播放器可以直接跳到某张幻灯片。
+
+示例：99 分钟 1080p 录屏（249 MB）用 Opus 12 kbps 约 10 MB，Opus 16 kbps 约 14 MB，AAC 48 kbps 约 38 MB，直接复制原音轨约 47 MB，无音频约 1 MB。文件大小主要由音频决定，幻灯片画面本身约 1 MB。
+
+重新编码的音频与播放器一样遵循源文件的时间戳：录屏软件丢掉音频的地方（录屏中很常见，上述讲座共约 3 秒）会用静音补齐，因此讲解声音与幻灯片始终保持同步。
 
 ## 命令行指南
 
@@ -668,6 +705,9 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `ml_started` | ML 分类开始，并包含 execution provider。 |
 | `ml_failed` | ML 分类器初始化或运行失败。 |
 | `post_complete` | 后处理汇总。 |
+| `pdf_exported` | `--export-pdf` 结果：路径、字节数、页数。 |
+| `video_progress` | `--export-video` 进度（百分比）。 |
+| `video_exported` | `--export-video` 结果：路径、字节数、时长、帧数、章节数、音频。 |
 | `done` | 全流程成功完成。 |
 | `cancelled` | SIGINT 或 SIGTERM 取消完成。 |
 | `error` | 结构化错误，通常写入 stderr。 |
@@ -700,6 +740,21 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `--ml-autocrop-maybe` | flag | 在删除 `may_be_slide` 图片前自动裁剪，成功则保留。 |
 | `--ml-postcrop-dedup` | flag | 后处理自动裁剪后重新检测 pHash 重复项。 |
 | `--write-timeline` | flag | 在输出幻灯片文件夹中写入 `timeline.json` 媒体时间映射文件。 |
+| `--export-pdf` | flag | 额外生成 `<output>/<name>.pdf`，包含剩余幻灯片，与 Slides Export 相同。不可与 `--compatible` 同用。 |
+| `--pdf-reduce-size` | bool | 按 `--pdf-aspect` 裁剪、缩放到 `--pdf-height` 并重新编码为 JPEG。默认 `true`；`false` 保持原图。 |
+| `--pdf-aspect` | ratio | `16:9` 或 `4:3`。默认 `16:9`。 |
+| `--pdf-height` | int | 页面高度（像素），例如 `1080`、`720`、`480`、`360`；`0` 表示原始尺寸。默认 `720`。 |
+| `--pdf-jpeg-quality` | int | JPEG 质量，`1` 到 `100`。默认 `50`。 |
+| `--export-video` | flag | 额外生成 `<output>/<name>.mp4`：按时间线把幻灯片生成视频，并使用输入视频的音频。隐含 `--write-timeline`。 |
+| `--video-height` | int | 视频高度（像素），例如 `1080`、`720`、`480`；`0` 表示幻灯片尺寸。不会放大幻灯片。默认 `1080`。 |
+| `--video-crf` | int | H.264 画质 `0` 到 `51`，越小越好（`18` 高、`23` 标准、`28` 小文件）。默认 `23`。 |
+| `--video-repeat` | int | 每 N 秒重复当前幻灯片；`0` 表示只在切换时出帧。默认 `120`。 |
+| `--video-audio` | mode | `aac`、`opus`、`copy` 或 `none`（`compress` 等同 `aac`）。默认 `aac`。 |
+| `--video-audio-bitrate` | int | 码率（kbps）：AAC `16` 到 `320`（默认 `48`），Opus `6` 到 `256`（默认 `16`）。仅用于 AAC/Opus。 |
+| `--video-audio-channels` | int | `1`（单声道）或 `2`（立体声）。默认 `1`。仅用于 AAC/Opus。 |
+| `--video-audio-rate` | int | AAC 采样率（Hz），`8000` 到 `48000`；`0` 表示源采样率（最高 48000）。默认 `0`。仅用于 AAC。 |
+
+`--pdf-*` 与 `--video-*` 的默认值与 Slides Export 默认设置相同。导出设置不会在多次运行之间保存。
 | `--compatible` | flag | Electron 兼容模式（输出 PNG 幻灯片，去除 `screen_` 前缀，跳过后处理）。 |
 | `--json` | flag | 输出 JSON Lines 并关闭文本进度条。 |
 | `--help` | flag | 打印帮助。 |
@@ -716,6 +771,8 @@ JSON 模式每行输出一个紧凑 JSON 对象，适合 `child_process.spawn`�
 | `3` | 输入或输出路径错误。 |
 | `4` | 视频处理失败。 |
 | `5` | 后处理失败。 |
+| `6` | 视频导出失败。 |
+| `7` | PDF 导出失败。 |
 | `130` | 被 SIGINT 取消，通常是 Ctrl-C。 |
 | `143` | 被 SIGTERM 取消。 |
 
@@ -763,6 +820,7 @@ slides_Lecture01/slide_Lecture01_001.jpg
 
 - **事件 (Events)**：捕获事件数组，记录 I-frame PTS 媒体时间（`changeAt`、`confirmedAt`）及 `initialFile` 基本文件名。
 - **决议 (Resolutions)**：可变的决议映射表，追踪幻灯片状态（`canonical`、`duplicate`、`gap`）。后处理与人工复核会更新决议状态（如 `duplicateOf`、`exclusion`、`ai_filtered`、`manual_trash`），而不会删除捕获事件，从而为播放器和下游应用提供稳定可追溯的时间线。
+- **来源 (Source)**（可选）：幻灯片所属视频的 `source.path`、`source.duration` 和 `source.startTime`。Slides Export 的视频模式据此查找音频。
 
 ### 应用垃圾箱
 
@@ -833,7 +891,8 @@ slides_Lecture01/slide_Lecture01_001.jpg
 - C++17 编译器
 - Qt 6 Core、Widgets、Gui
 - OpenCV 4.x core、imgproc、imgcodecs
-- FFmpeg 开发库：libavcodec、libavformat、libavutil、libswscale
+- FFmpeg 开发库：libavcodec、libavformat、libavutil、libswscale、libswresample
+- 视频模式需要启用 libx264 的 FFmpeg（`vcpkg.json` 已启用）；若没有，会使用其他可用的 H.264 编码器。Opus 音频需要 FFmpeg 启用 libopus（`vcpkg.json` 已启用）；若没有，Opus 选项不可用
 
 可选：
 
@@ -1019,7 +1078,9 @@ otool -L AutoSlidesExtractor.app/Contents/MacOS/AutoSlidesExtractor | grep homeb
 
 ## 许可证
 
-本项目使用 [MIT License](LICENSE)。
+源代码使用 [MIT License](LICENSE)。
+
+发布版本捆绑了启用 libx264 的 FFmpeg（用于视频模式），libx264 是 GPL 软件，因此发布的程序按 [GNU GPL 第 3 版](licenses/GPL-3.0.txt) 分发。每个安装包都包含 `licenses` 文件夹，内有此说明、GPL 全文以及获取对应源代码的方式，详见 [licenses/NOTICE.txt](licenses/NOTICE.txt)。
 
 ---
 

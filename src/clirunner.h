@@ -7,6 +7,8 @@
 #include <QList>
 #include <QElapsedTimer>
 #include <QJsonObject>
+#include "videoexporter.h"
+#include "pdfexporter.h"
 #include "configmanager.h"
 #include "postprocessor.h"
 #include "processingpipeline.h"
@@ -43,6 +45,8 @@ private:
     bool parseExclusionHashes(const QString& csv, QString* errorOut);
     int runProcessingStage(QString* outSlidesDir, int* outSlideCount);
     int runPostProcessingStage(const QString& slidesDir);
+    int runVideoExportStage(const QString& slidesDir);
+    int runPdfExportStage(const QString& slidesDir);
 
     void writeStdout(const QString& line);
     void writeStderr(const QString& line);
@@ -67,6 +71,10 @@ private:
     bool m_phashExclusion;
     bool m_mlClassify;
     bool m_exclusionListOverridden;
+    bool m_exportVideo = false;
+    VideoExportOptions m_videoOptions;   // Slides Export defaults + --video-* flags
+    bool m_exportPdf = false;
+    PdfExportOptions m_pdfOptions;       // Slides Export defaults + --pdf-* flags
     QList<ExclusionEntry> m_exclusionList;
 
     int m_processingResultCode;
