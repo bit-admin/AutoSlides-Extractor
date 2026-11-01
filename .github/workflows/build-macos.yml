@@ -96,14 +96,6 @@ jobs:
           cmake --version | head -1
           xcrun clang --version | head -1
 
-      # vcpkg package ABI includes the compiler; put it in the cache key.
-      - name: Detect Apple clang version (vcpkg cache key)
-        id: clang
-        run: |
-          ver="$(xcrun clang --version | sed -nE '1s/.*clang-([0-9.]+).*/\1/p')"
-          [ -n "$ver" ] || ver="$(xcrun clang --version | head -1 | tr -c 'A-Za-z0-9.' '-')"
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-
       - name: Install Qt (qtbase + qtsvg only)
         uses: jurplel/install-qt-action@v4
         with:
@@ -121,9 +113,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', 'installer/vcpkg-triplets/*.cmake') }}-clang${{ steps.clang.outputs.version }}-g1
+          # Cache entries are immutable, so each run that builds packages saves a
+          # new entry (run id suffix) and later runs restore the newest one.
+          # No compiler version in the key: vcpkg's own ABI hashes decide what
+          # is reusable, and one entry can hold packages for several runner images.
+          key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
           restore-keys: |
-            vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', 'installer/vcpkg-triplets/*.cmake') }}-clang${{ steps.clang.outputs.version }}-
+            vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-
 
       - name: Setup vcpkg (pinned)
         run: |
@@ -145,22 +141,40 @@ jobs:
             --x-manifest-root=. \
             --x-install-root=build/vcpkg_installed 2>&1 | tee "$log"
           # Did we compile anything from source? If yes, the bincache has new packages.
-          if grep -qE '^Building (ffmpeg|opencv4)' "$log"; then
+          if grep -qE '^Building [^ ]+@' "$log"; then
             echo "did_build=true" >> "$GITHUB_OUTPUT"
           else
             echo "did_build=false" >> "$GITHUB_OUTPUT"
           fi
           ls "build/vcpkg_installed/$VCPKG_TRIPLET/lib"
 
-      # Save right away; do not skip just because restore reported a hit
-      # (a partial-key hit can still have rebuilt ffmpeg).
+      # Keep the archives this run used (their ABI hashes are in the installed
+      # status file) plus anything built in the last 14 days (e.g. the other
+      # runner image while GitHub rolls out a new one); drop the rest so the
+      # cache does not grow with every image update.
+      - name: Prune vcpkg binary cache
+        if: success() && steps.vcpkg-install.outputs.did_build == 'true'
+        run: |
+          used="$RUNNER_TEMP/vcpkg-used-abis.txt"
+          sed -n 's/^Abi: //p' build/vcpkg_installed/vcpkg/status | sort -u > "$used"
+          echo "packages in use: $(wc -l < "$used")"
+          find "$GITHUB_WORKSPACE/vcpkg-bincache" -type f -name '*.zip' -mtime +14 | while read -r f; do
+            if ! grep -qx "$(basename "$f" .zip)" "$used"; then
+              echo "prune $(basename "$f")"
+              rm -f "$f"
+            fi
+          done
+          echo "archives kept: $(find "$GITHUB_WORKSPACE/vcpkg-bincache" -type f -name '*.zip' | wc -l)"
+          du -sh "$GITHUB_WORKSPACE/vcpkg-bincache"
+
+      # Save right away (survives later failures) whenever anything was built.
       - name: Save vcpkg binary package cache
-        if: success() && (steps.restore-vcpkg-bin.outputs.cache-hit != 'true' || steps.vcpkg-install.outputs.did_build == 'true')
+        if: success() && steps.vcpkg-install.outputs.did_build == 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', 'installer/vcpkg-triplets/*.cmake') }}-clang${{ steps.clang.outputs.version }}-g1
+          key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
 
       - name: Restore ONNX Runtime
         id: restore-onnx

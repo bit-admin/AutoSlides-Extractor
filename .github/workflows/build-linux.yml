@@ -3,7 +3,7 @@
 # Mirrors build-windows.yml:
 #   - same pinned vcpkg + vcpkg.json (minimal OpenCV/FFmpeg features), so the
 #     bundle does not drag in distro OpenCV's GDAL/HDF5/... dependency tree
-#   - x64-linux-dynamic triplet: FFmpeg/OpenCV ship as .so next to the app,
+#   - x64-linux-dynamic-release overlay triplet: FFmpeg/OpenCV ship as .so next to the app,
 #     like the DLLs on Windows (FFmpeg with x264, GPLv3; see README "License")
 #   - packaging lives in installer/package-linux.sh (runnable locally): deps are
 #     discovered from the built binary, missing critical libs fail the build
@@ -55,7 +55,8 @@ env:
   ONNX_PACKAGE: "onnxruntime-linux-x64"
   # Same pin as build-windows.yml (FFmpeg 8.1.2, OpenCV 4.12.0). Bump intentionally.
   VCPKG_COMMIT: "2026.07.29"
-  VCPKG_TRIPLET: "x64-linux-dynamic"
+  VCPKG_TRIPLET: "x64-linux-dynamic-release"
+  VCPKG_OVERLAY_TRIPLETS: "${{ github.workspace }}/installer/vcpkg-triplets"
   VCPKG_ROOT: "/home/runner/vcpkg"
   VCPKG_DISABLE_METRICS: "1"
   VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
@@ -95,11 +96,6 @@ jobs:
             libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 \
             libxcb-xkb1 xvfb xauth ffmpeg
 
-      # vcpkg package ABI includes the compiler; put it in the cache key.
-      - name: Detect GCC version (vcpkg cache key)
-        id: gcc
-        run: echo "version=$(gcc -dumpfullversion)" >> "$GITHUB_OUTPUT"
-
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -117,9 +113,13 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-gcc${{ steps.gcc.outputs.version }}-g1
+          # Cache entries are immutable, so each run that builds packages saves a
+          # new entry (run id suffix) and later runs restore the newest one.
+          # No compiler version in the key: vcpkg's own ABI hashes decide what
+          # is reusable, and one entry can hold packages for several runner images.
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
           restore-keys: |
-            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-gcc${{ steps.gcc.outputs.version }}-
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-
 
       - name: Setup vcpkg (pinned)
         run: |
@@ -137,25 +137,44 @@ jobs:
           set -o pipefail
           "$VCPKG_ROOT/vcpkg" install \
             --triplet "$VCPKG_TRIPLET" \
+            --overlay-triplets="$VCPKG_OVERLAY_TRIPLETS" \
             --x-manifest-root=. \
             --x-install-root=build/vcpkg_installed 2>&1 | tee "$log"
           # Did we compile anything from source? If yes, the bincache has new packages.
-          if grep -qE '^Building (ffmpeg|opencv4)' "$log"; then
+          if grep -qE '^Building [^ ]+@' "$log"; then
             echo "did_build=true" >> "$GITHUB_OUTPUT"
           else
             echo "did_build=false" >> "$GITHUB_OUTPUT"
           fi
           ls "build/vcpkg_installed/$VCPKG_TRIPLET/lib"
 
-      # Save right away; do not skip just because restore reported a hit
-      # (a partial-key hit can still have rebuilt ffmpeg).
+      # Keep the archives this run used (their ABI hashes are in the installed
+      # status file) plus anything built in the last 14 days (e.g. the other
+      # runner image while GitHub rolls out a new one); drop the rest so the
+      # cache does not grow with every image update.
+      - name: Prune vcpkg binary cache
+        if: success() && steps.vcpkg-install.outputs.did_build == 'true'
+        run: |
+          used="$RUNNER_TEMP/vcpkg-used-abis.txt"
+          sed -n 's/^Abi: //p' build/vcpkg_installed/vcpkg/status | sort -u > "$used"
+          echo "packages in use: $(wc -l < "$used")"
+          find "$GITHUB_WORKSPACE/vcpkg-bincache" -type f -name '*.zip' -mtime +14 | while read -r f; do
+            if ! grep -qx "$(basename "$f" .zip)" "$used"; then
+              echo "prune $(basename "$f")"
+              rm -f "$f"
+            fi
+          done
+          echo "archives kept: $(find "$GITHUB_WORKSPACE/vcpkg-bincache" -type f -name '*.zip' | wc -l)"
+          du -sh "$GITHUB_WORKSPACE/vcpkg-bincache"
+
+      # Save right away (survives later failures) whenever anything was built.
       - name: Save vcpkg binary package cache
-        if: success() && (steps.restore-vcpkg-bin.outputs.cache-hit != 'true' || steps.vcpkg-install.outputs.did_build == 'true')
+        if: success() && steps.vcpkg-install.outputs.did_build == 'true'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-gcc${{ steps.gcc.outputs.version }}-g1
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
 
       - name: Restore ONNX Runtime
         id: restore-onnx
@@ -197,6 +216,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET="$VCPKG_TRIPLET" \
+            -DVCPKG_OVERLAY_TRIPLETS="$VCPKG_OVERLAY_TRIPLETS" \
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/build/vcpkg_installed" \
             -DVCPKG_MANIFEST_INSTALL=OFF \
             -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
