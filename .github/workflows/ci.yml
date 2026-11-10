@@ -1,8 +1,8 @@
 # Fast checks (well under a minute) on every push to main and every PR,
 # including docs-only changes that skip the package builds.
 #
-#   versions: CMakeLists.txt, vcpkg.json, the Windows .rc and the NSIS script
-#             agree on the version. On a tag (when called from release.yml) the
+#   versions: CMakeLists.txt, vcpkg.json, the Windows .rc, the NSIS script and the
+#             two strings in src/ (main.cpp, mainwindow.cpp) agree on the version. On a tag (when called from release.yml) the
 #             tag must be v<version> and CHANGELOG.md must have a [<version>] entry.
 #   lint:     actionlint on the workflows; syntax check of the packaging scripts
 #             (shellcheck at error level for the bash one).
@@ -54,6 +54,8 @@ jobs:
               "rc ProductVersion": grab("resources/AutoSlidesExtractor.rc", r'"ProductVersion",\s*"([^"]+)"'),
               "nsi VIProductVersion": grab("installer/AutoSlidesExtractor.nsi", r'^VIProductVersion\s+"([^"]+)"'),
               "nsi FileVersion": grab("installer/AutoSlidesExtractor.nsi", r'^VIAddVersionKey\s+"FileVersion"\s+"([^"]+)"'),
+              "main.cpp applicationVersion": grab("src/main.cpp", r'setApplicationVersion\(QStringLiteral\("([^"]+)"\)\)'),
+              "mainwindow.cpp window title": grab("src/mainwindow.cpp", r'setWindowTitle\("AutoSlides Extractor v([^"]+)"\)'),
           }
           expected = {
               "vcpkg.json version": ver,
@@ -63,6 +65,8 @@ jobs:
               "rc ProductVersion": ver,
               "nsi VIProductVersion": ver + ".0",
               "nsi FileVersion": ver + ".0",
+              "main.cpp applicationVersion": ver,
+              "mainwindow.cpp window title": ver,
           }
           bad = False
           for key, want in expected.items():
