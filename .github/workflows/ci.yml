@@ -1,0 +1,113 @@
+# Fast checks (well under a minute) on every push to main and every PR,
+# including docs-only changes that skip the package builds.
+#
+#   versions: CMakeLists.txt, vcpkg.json, the Windows .rc and the NSIS script
+#             agree on the version. On a tag (when called from release.yml) the
+#             tag must be v<version> and CHANGELOG.md must have a [<version>] entry.
+#   lint:     actionlint on the workflows; syntax check of the packaging scripts
+#             (shellcheck at error level for the bash one).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check version numbers agree
+        shell: python
+        run: |
+          import json, os, re, sys
+
+          def grab(path, pattern):
+              m = re.search(pattern, open(path, encoding="utf-8").read(), re.M)
+              return m.group(1) if m else None
+
+          ver = grab("CMakeLists.txt", r"^project\(AutoSlidesExtractor VERSION ([0-9]+\.[0-9]+\.[0-9]+)")
+          if not ver:
+              print("::error file=CMakeLists.txt::Could not parse project VERSION")
+              sys.exit(1)
+          commas = ver.replace(".", ",") + ",0"
+          print(f"CMakeLists.txt version: {ver}")
+
+          found = {
+              "vcpkg.json version": json.load(open("vcpkg.json"))["version"],
+              "rc FILEVERSION": grab("resources/AutoSlidesExtractor.rc", r"^FILEVERSION\s+([0-9,]+)"),
+              "rc PRODUCTVERSION": grab("resources/AutoSlidesExtractor.rc", r"^PRODUCTVERSION\s+([0-9,]+)"),
+              "rc FileVersion": grab("resources/AutoSlidesExtractor.rc", r'"FileVersion",\s*"([^"]+)"'),
+              "rc ProductVersion": grab("resources/AutoSlidesExtractor.rc", r'"ProductVersion",\s*"([^"]+)"'),
+              "nsi VIProductVersion": grab("installer/AutoSlidesExtractor.nsi", r'^VIProductVersion\s+"([^"]+)"'),
+              "nsi FileVersion": grab("installer/AutoSlidesExtractor.nsi", r'^VIAddVersionKey\s+"FileVersion"\s+"([^"]+)"'),
+          }
+          expected = {
+              "vcpkg.json version": ver,
+              "rc FILEVERSION": commas,
+              "rc PRODUCTVERSION": commas,
+              "rc FileVersion": ver,
+              "rc ProductVersion": ver,
+              "nsi VIProductVersion": ver + ".0",
+              "nsi FileVersion": ver + ".0",
+          }
+          bad = False
+          for key, want in expected.items():
+              got = found[key]
+              ok = got == want
+              bad |= not ok
+              print(f"{'ok ' if ok else 'BAD'} {key}: {got!r} (want {want!r})")
+              if not ok:
+                  print(f"::error::{key} is {got!r}, expected {want!r} (from CMakeLists.txt)")
+
+          has_entry = re.search(rf"^## \[{re.escape(ver)}\]", open("CHANGELOG.md", encoding="utf-8").read(), re.M)
+          ref = os.environ.get("GITHUB_REF", "")
+          if ref.startswith("refs/tags/"):
+              tag = ref[len("refs/tags/"):]
+              if tag != f"v{ver}":
+                  print(f"::error::Tag {tag} does not match CMakeLists.txt version (v{ver})")
+                  bad = True
+              if not has_entry:
+                  print(f"::error file=CHANGELOG.md::No '## [{ver}]' entry for the release")
+                  bad = True
+          elif not has_entry:
+              print(f"::warning file=CHANGELOG.md::No '## [{ver}]' entry yet (required before tagging v{ver})")
+
+          sys.exit(1 if bad else 0)
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ACTIONLINT_VERSION: "1.7.7"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: actionlint
+        run: |
+          curl -sSfL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar xzf actionlint.tar.gz actionlint
+          # shellcheck/pyflakes on inline run: blocks are off: too noisy for
+          # long packaging scripts; workflow structure/expressions are what we want.
+          ./actionlint -color -shellcheck= -pyflakes=
+
+      - name: Packaging scripts
+        run: |
+          sudo apt-get install -y --no-install-recommends zsh >/dev/null
+          bash -n installer/package-linux.sh
+          zsh -n installer/package-macos.sh
+          shellcheck -S error installer/package-linux.sh

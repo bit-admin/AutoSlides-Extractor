@@ -1,6 +1,5 @@
 # Build + package AutoSlides Extractor for Windows (portable ZIP + NSIS).
 #
-# Intentionally gitignored in the private tree; mirrored to a public repo for CI.
 # Packaging philosophy matches package-macos.sh:
 #   - discover deps from the built binary (no hardcoded OpenCV 4.x names)
 #   - fail hard on missing critical DLLs
@@ -10,7 +9,8 @@
 # Artifacts:
 #   AutoSlides.Extractor-<ver>-Windows-x64-Portable.zip
 #   AutoSlides.Extractor-<ver>-Windows-x64-Setup.exe
-# Draft release (push/workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
+# Release: none here. A v<ver> tag runs release.yml, which calls this workflow
+#   and attaches the uploaded artifacts to a single draft release.
 #
 # Caching strategy (restore early, SAVE right after each success):
 #   - Qt: install-qt-action (qtbase + qtsvg)
@@ -29,9 +29,15 @@ name: Build Windows Release
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   pull_request:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
+  # release.yml calls this on a v* tag and publishes the artifacts to one draft.
+  workflow_call:
 
 concurrency:
   group: windows-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -40,9 +46,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  # contents:write required for softprops/action-gh-release when using github.token
-  # (create tag/release + generate release notes). PAT still preferred via `token:`.
-  contents: write
+  # Read-only: publishing happens in release.yml.
+  contents: read
 
 env:
   ONNXRUNTIME_VERSION: "1.23.2"
@@ -723,28 +728,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-
-      # Draft GitHub Release (main / manual only).
-      # softprops uses the `token` input (default github.token), NOT env GITHUB_TOKEN.
-      # Prefer secret RELEASE_PAT (fine-grained: Contents R/W on this repo, or classic `repo`).
-      # Fallback: github.token works when permissions.contents is write (set above).
-      - name: Create draft release
-        if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
-        with:
-          # Empty secret → github.token (needs contents:write). Non-empty PAT preferred.
-          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          draft: true
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          # Never replace an asset that is already on the release: a re-run against a
-          # published version (e.g. a Linux-only change merged after v<ver> shipped)
-          # must not swap the Windows binaries users already downloaded. To refresh a
-          # draft's Windows files, delete them from the draft first.
-          overwrite_files: false
-          files: |
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Portable.zip
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe

@@ -23,7 +23,8 @@
 #   AutoSlides.Extractor-<ver>-Linux-x86_64-Portable.tar.gz
 #   AutoSlides.Extractor-<ver>-Linux-x86_64.deb   (same bundle in /opt; Depends
 #     resolved against ubuntu-22.04 package names, so it installs on 22.04+/Debian 12+)
-# Draft release (push to main / workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
+# Release: none here. A v<ver> tag runs release.yml, which calls this workflow
+#   and attaches the uploaded artifacts to a single draft release.
 #
 # Caching (restore early, SAVE right after each success so a later failure
 # does not throw away a cold FFmpeg/OpenCV compile):
@@ -35,9 +36,15 @@ name: Build Linux Release
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   pull_request:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
+  # release.yml calls this on a v* tag and publishes the artifacts to one draft.
+  workflow_call:
 
 concurrency:
   group: linux-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -45,8 +52,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  # contents:write required for softprops/action-gh-release when using github.token.
-  contents: write
+  # Read-only: publishing happens in release.yml.
+  contents: read
 
 env:
   QT_VERSION: "6.8.3"
@@ -363,21 +370,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-
-      # Draft GitHub Release, same tag as the Windows workflow so both platforms'
-      # assets land on one draft. Only from main or a manual run.
-      - name: Create draft release
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          draft: true
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: |
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64.AppImage
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-Portable.tar.gz
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64.deb
