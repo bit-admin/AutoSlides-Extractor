@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 2.0.0 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 2.1.0 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -312,7 +312,7 @@ endif()
 # Find FFmpeg libraries using standard CMake approach
 # Try to use PkgConfig first (most reliable on Unix systems)
 if(PkgConfig_FOUND)
-    pkg_check_modules(FFMPEG QUIET libavcodec libavformat libavutil libswscale)
+    pkg_check_modules(FFMPEG QUIET libavcodec libavformat libavutil libswscale libswresample)
 endif()
 
 if(FFMPEG_FOUND)
@@ -371,6 +371,11 @@ else()
             NAMES swscale libswscale swscale-7 libswscale-7
             PATHS ${FFMPEG_LIB_SEARCH_PATHS}
         )
+
+        find_library(SWRESAMPLE_LIBRARY
+            NAMES swresample libswresample
+            PATHS ${FFMPEG_LIB_SEARCH_PATHS}
+        )
     else()
         find_library(AVCODEC_LIBRARY avcodec
             PATHS ${FFMPEG_LIB_SEARCH_PATHS}
@@ -387,13 +392,17 @@ else()
         find_library(SWSCALE_LIBRARY swscale
             PATHS ${FFMPEG_LIB_SEARCH_PATHS}
         )
+
+        find_library(SWRESAMPLE_LIBRARY swresample
+            PATHS ${FFMPEG_LIB_SEARCH_PATHS}
+        )
     endif()
 
     # Check if all required libraries were found
-    if(FFMPEG_INCLUDE_DIR AND AVCODEC_LIBRARY AND AVFORMAT_LIBRARY AND AVUTIL_LIBRARY AND SWSCALE_LIBRARY)
+    if(FFMPEG_INCLUDE_DIR AND AVCODEC_LIBRARY AND AVFORMAT_LIBRARY AND AVUTIL_LIBRARY AND SWSCALE_LIBRARY AND SWRESAMPLE_LIBRARY)
         set(FFMPEG_FOUND TRUE)
         set(FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIR})
-        set(FFMPEG_LIBRARIES ${AVCODEC_LIBRARY} ${AVFORMAT_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY})
+        set(FFMPEG_LIBRARIES ${AVCODEC_LIBRARY} ${AVFORMAT_LIBRARY} ${AVUTIL_LIBRARY} ${SWSCALE_LIBRARY} ${SWRESAMPLE_LIBRARY})
         message(STATUS "FFmpeg found via manual search")
     else()
         set(FFMPEG_FOUND FALSE)
@@ -445,6 +454,7 @@ set(SOURCES
     src/autocropdetector.cpp
     src/pdfmakerdialog.cpp
     src/pdfexporter.cpp
+    src/videoexporter.cpp
     src/autocroptestpreviewwidget.cpp
     src/clitab.cpp
     src/autocroptab.cpp
@@ -493,6 +503,7 @@ set(HEADERS
     src/autocropdetector.h
     src/pdfmakerdialog.h
     src/pdfexporter.h
+    src/videoexporter.h
     src/autocroptestpreviewwidget.h
     src/clitab.h
     src/autocroptab.h
@@ -615,4 +626,10 @@ if(UNIX AND NOT APPLE)
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(FILES resources/AutoSlidesExtractor.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/256x256/apps)
+    # Licence notice + GPL text (release builds bundle GPL FFmpeg/x264)
+    install(FILES licenses/NOTICE.txt licenses/GPL-3.0.txt
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/AutoSlidesExtractor/licenses)
+    install(FILES LICENSE
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/AutoSlidesExtractor/licenses
+        RENAME LICENSE-MIT.txt)
 endif()

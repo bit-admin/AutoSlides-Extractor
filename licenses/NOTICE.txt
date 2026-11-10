@@ -1,0 +1,33 @@
+AutoSlides Extractor - licence notice for release builds
+=========================================================
+
+Source code
+  The AutoSlides Extractor source code is licensed under the MIT License
+  (LICENSE-MIT.txt here, LICENSE in the repository).
+
+Release builds (this package)
+  Release builds bundle FFmpeg built with libx264, the H.264 encoder used by
+  the "Video" mode of Slides Export. libx264 is licensed under the GNU GPL, so
+  FFmpeg is configured with --enable-gpl --enable-version3, and the program as
+  distributed in this package is covered by the GNU General Public License,
+  version 3 (GPL-3.0.txt). You may use, study, share and modify it under those
+  terms. There is NO WARRANTY, to the extent permitted by law.
+
+  Bundled components keep their own licences:
+    FFmpeg        GPL-3.0-or-later in this configuration  https://ffmpeg.org
+    x264          GPL-2.0-or-later                        https://www.videolan.org/developers/x264.html
+    Opus          BSD-3-Clause                            https://opus-codec.org
+    Qt 6          LGPL-3.0                                https://www.qt.io
+    OpenCV        Apache-2.0                              https://opencv.org
+    ONNX Runtime  MIT                                     https://onnxruntime.ai
+
+Corresponding source
+  AutoSlides Extractor: https://github.com/bit-admin/AutoSlides-Extractor
+    (the tag matching this version; build scripts are in .github/workflows
+    and installer/).
+  FFmpeg, x264, Opus, OpenCV: built by vcpkg from the ports pinned by VCPKG_COMMIT
+    in .github/workflows (vcpkg tag 2026.07.29) with the features listed in
+    vcpkg.json:
+      https://github.com/microsoft/vcpkg/tree/2026.07.29/ports/ffmpeg
+      https://github.com/microsoft/vcpkg/tree/2026.07.29/ports/x264
+      https://github.com/microsoft/vcpkg/tree/2026.07.29/ports/opus

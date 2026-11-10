@@ -2,6 +2,7 @@
 #define PROCESSINGTHREAD_H
 
 #include <QThread>
+#include <atomic>
 #include <QMutex>
 #include <QWaitCondition>
 #include <QTimer>
@@ -153,6 +154,12 @@ private:
      */
     QString getTempDirectory();
 
+    /**
+     * Cancel the active decoder and wake every producer/consumer wait so the
+     * worker threads notice a stop/pause request instead of blocking forever.
+     */
+    void wakeWorkers();
+
     VideoQueue* m_videoQueue;
     std::unique_ptr<VideoProcessor> m_videoProcessor;
     std::unique_ptr<SlideDetector> m_slideDetector;
@@ -160,8 +167,9 @@ private:
 
     mutable QMutex m_mutex;
     QWaitCondition m_condition;
-    bool m_shouldStop;
-    bool m_shouldPause;
+    // Read by the producer/consumer worker threads without m_mutex
+    std::atomic<bool> m_shouldStop;
+    std::atomic<bool> m_shouldPause;
     bool m_isProcessing;
 
     int m_currentVideoIndex;

@@ -171,5 +171,23 @@ gen/
 *.key
 *.crt
 
+#########################
+# Local-only (not part of the public repo)
+#########################
+
+# Third-party binaries (ONNX Runtime etc.) and caches
+/vendor/
+/.cache/
+
+# Qt Creator CMake user files
+CMakeLists.txt.user*
+
+# Local packaging script
+/package-macos.sh
+
+# AI assistants and notes
 CLAUDE.md
 AGENTS.md
+instructions.md
+.claude/
+/REFERENCE/

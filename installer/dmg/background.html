@@ -1,0 +1,48 @@
+<!doctype html>
+<!--
+  DMG window background, 640x480 points. Everything sits in the top ~370 points:
+  how much of the window Finder shows depends on the macOS version (title bar
+  height, the user's status bar setting), and the rest is plain white.
+  The Finder draws the two icons on top: "AutoSlides Extractor.app" centred at
+  (160, 238) and "Applications" at (480, 238) (see dmg-settings.py).
+  Rendered to background.png (1x) and background@2x.png (2x) with
+  render-background.js; dmgbuild combines them into one Retina TIFF.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body {
+    width: 640px; height: 480px; overflow: hidden; position: relative;
+    background: #ffffff; color: #1d1d1f;
+    font-family: FreeSans, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  .title {
+    position: absolute; left: 0; right: 0; top: 20px; text-align: center;
+    font-size: 21px; line-height: 28px;
+  }
+  .command {
+    position: absolute; left: 40px; right: 40px; top: 90px;
+    padding: 9px 14px; border-radius: 8px;
+    background: #f2f2f4; border: 1px solid #e2e2e6;
+    font-family: FreeMono, Courier, "Courier New", monospace;
+    font-size: 15.5px; line-height: 20px; color: #d6261a; text-align: center;
+  }
+  .arrow { position: absolute; left: 280px; top: 218px; }
+  .copyright {
+    position: absolute; left: 0; right: 0; top: 342px; text-align: center;
+    font-size: 12px; color: #86868b;
+  }
+</style>
+</head>
+<body>
+  <div class="title">Drag AutoSlides Extractor to the Applications folder,<br>then <b>run this command</b> in the Terminal:</div>
+  <div class="command">sudo xattr -d com.apple.quarantine /Applications/<br>AutoSlides\ Extractor.app</div>
+  <svg class="arrow" width="80" height="40" viewBox="0 0 80 40" aria-hidden="true">
+    <rect x="0" y="16" width="52" height="8" rx="1" fill="#1d1d1f"/>
+    <polygon points="48,2 78,20 48,38" fill="#1d1d1f"/>
+  </svg>
+  <div class="copyright">Copyright © 2025 bit-admin. All rights reserved.</div>
+</body>
+</html>

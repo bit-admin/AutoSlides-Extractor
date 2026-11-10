@@ -38,6 +38,12 @@ struct TimelineData {
     QString updatedAt;
     QList<SlideCaptureEvent> events;
     QMap<QString, SlideResolution> resolutions; // eventId -> resolution
+
+    // Optional "source" block: the video the slides came from. Event times are
+    // that file's media times (container clock, startTime is its origin).
+    QString sourcePath;           // absolute path at extraction time
+    double sourceDuration = -1.0; // seconds; < 0 = unknown
+    double sourceStartTime = 0.0; // seconds
 };
 
 /**
@@ -60,6 +66,12 @@ public:
                                     double changeAt,
                                     double confirmedAt,
                                     const QString& initialFile);
+
+    /** Record the source video (creates the file if needed; keeps events). */
+    static bool setSource(const QString& slidesDir,
+                          const QString& videoPath,
+                          double duration,
+                          double startTime);
 
     /** Mark events whose initialFile matches trashed basename as duplicate. */
     static bool markDuplicate(const QString& slidesDir,

@@ -41,10 +41,9 @@ ProcessingThread::ProcessingThread(VideoQueue* videoQueue, QObject *parent)
     connect(m_videoProcessor.get(), &VideoProcessor::extractionError,
             this, &ProcessingThread::onExtractionError);
 
-    connect(m_slideDetector.get(), &SlideDetector::ssimCalculationProgress,
-            this, &ProcessingThread::onSSIMCalculationProgress);
-    connect(m_slideDetector.get(), &SlideDetector::slideDetectionProgress,
-            this, &ProcessingThread::onSlideDetectionProgress);
+    // SlideDetector's per-chunk SSIM/detection progress is not forwarded: it restarts
+    // at 0% for every chunk and would fight the whole-video percentage that
+    // consumerThread() reports on the same progress bar.
     connect(m_slideDetector.get(), &SlideDetector::detectionError,
             this, &ProcessingThread::onDetectionError);
 }
@@ -76,9 +75,27 @@ void ProcessingThread::pauseProcessing()
 
 void ProcessingThread::stopProcessing()
 {
-    QMutexLocker locker(&m_mutex);
-    m_shouldStop = true;
-    m_condition.wakeOne();
+    {
+        QMutexLocker locker(&m_mutex);
+        m_shouldStop = true;
+        m_condition.wakeOne();
+    }
+    wakeWorkers();
+}
+
+void ProcessingThread::wakeWorkers()
+{
+    {
+        QMutexLocker locker(&m_decoderMutex);
+        if (m_currentDecoder) {
+            m_currentDecoder->requestCancellation();
+        }
+    }
+    // Wake while holding the queue mutex so a worker that has just checked the
+    // flags cannot miss the wake-up before it starts waiting.
+    QMutexLocker locker(&m_queueMutex);
+    m_queueNotFull.wakeAll();
+    m_queueNotEmpty.wakeAll();
 }
 
 void ProcessingThread::forceStop()
@@ -90,14 +107,6 @@ void ProcessingThread::forceStop()
         m_shouldPause = false;
     }
 
-    // Cancel the current decoder if it exists
-    {
-        QMutexLocker locker(&m_decoderMutex);
-        if (m_currentDecoder) {
-            m_currentDecoder->requestCancellation();
-        }
-    }
-
     // Mark current video as error if processing
     if (m_currentVideoIndex >= 0) {
         m_videoQueue->updateStatus(m_currentVideoIndex, ProcessingStatus::Error);
@@ -105,8 +114,7 @@ void ProcessingThread::forceStop()
 
     // Wake up all waiting threads
     m_condition.wakeAll();
-    m_queueNotFull.wakeAll();
-    m_queueNotEmpty.wakeAll();
+    wakeWorkers();
 }
 
 bool ProcessingThread::isProcessing() const
@@ -243,6 +251,11 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         // Prepare output directory
         QString outputDir = createOutputDirectory(video->filePath, m_config.outputDirectory);
         video->outputDirectory = outputDir;  // Store for post-processing
+        if (m_config.writeTimeline) {
+            // Lets Slides Export find the audio for a video export later
+            TimelineMetadata::setSource(outputDir, QFileInfo(video->filePath).absoluteFilePath(),
+                                        videoInfo.duration, videoInfo.startTime);
+        }
         QFileInfo videoFileInfo(video->filePath);
         QString videoName = videoFileInfo.baseName();
         if (m_config.compatibleMode) videoName = stripScreenPrefix(videoName);

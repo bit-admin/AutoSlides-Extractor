@@ -37,6 +37,7 @@ public:
      */
     struct VideoInfo {
         double duration = 0.0;          // Duration in seconds
+        double startTime = 0.0;         // Container start time in seconds (frame PTS origin)
         double frameRate = 0.0;         // Frame rate
         int width = 0;                  // Video width
         int height = 0;                 // Video height
@@ -244,6 +245,21 @@ private:
      * @return true if successful
      */
     bool convertFrameToMat(AVFrame* frame, cv::Mat& mat);
+
+    /**
+     * Send one packet to the decoder (nullptr = flush at end of stream) and pass
+     * every frame it returns to onFrame. Decoders may buffer frames (B-frame
+     * reordering, frame threading, hardware pipelines), so one packet can yield
+     * zero, one or several frames.
+     * @return false on a decoding error
+     */
+    bool sendPacketAndDrain(const AVPacket* packet, const std::function<void(AVFrame*)>& onFrame);
+
+    /**
+     * Presentation time of a decoded frame in seconds (best-effort timestamp,
+     * falling back to pts). Returns -1 when the frame carries no timestamp.
+     */
+    double frameTimestampSeconds(const AVFrame* frame) const;
 
     /**
      * Convert AVFrame to FrameBuffer with zero-copy optimization

@@ -1,6 +1,5 @@
 # Build + package AutoSlides Extractor for Windows (portable ZIP + NSIS).
 #
-# Intentionally gitignored in the private tree; mirrored to a public repo for CI.
 # Packaging philosophy matches package-macos.sh:
 #   - discover deps from the built binary (no hardcoded OpenCV 4.x names)
 #   - fail hard on missing critical DLLs
@@ -10,7 +9,8 @@
 # Artifacts:
 #   AutoSlides.Extractor-<ver>-Windows-x64-Portable.zip
 #   AutoSlides.Extractor-<ver>-Windows-x64-Setup.exe
-# Draft release (push/workflow_dispatch only): tag v<ver>, secret RELEASE_PAT
+# Release: none here. A v<ver> tag runs release.yml, which calls this workflow
+#   and attaches the uploaded artifacts to a single draft release.
 #
 # Caching strategy (restore early, SAVE right after each success):
 #   - Qt: install-qt-action (qtbase + qtsvg)
@@ -29,9 +29,15 @@ name: Build Windows Release
 on:
   push:
     branches: [main]
+    # Docs-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   pull_request:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+  # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
+  # release.yml calls this on a v* tag and publishes the artifacts to one draft.
+  workflow_call:
 
 concurrency:
   group: windows-build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -40,9 +46,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  # contents:write required for softprops/action-gh-release when using github.token
-  # (create tag/release + generate release notes). PAT still preferred via `token:`.
-  contents: write
+  # Read-only: publishing happens in release.yml.
+  contents: read
 
 env:
   ONNXRUNTIME_VERSION: "1.23.2"
@@ -53,7 +58,10 @@ env:
   # 2026.07.29: FFmpeg 8.1.2, OpenCV 4.12.0. (2025.04.09 broke: its pinned MSYS2
   # package file-5.45-3, needed to build FFmpeg, is gone from all mirrors.)
   VCPKG_COMMIT: "2026.07.29"
-  VCPKG_DEFAULT_TRIPLET: "x64-windows"
+  # Release-only community triplet: the app is only built in Release, so skip
+  # the debug builds of FFmpeg/OpenCV (about a third of a cold vcpkg build).
+  VCPKG_TRIPLET: "x64-windows-release"
+  VCPKG_DEFAULT_TRIPLET: "x64-windows-release"
   # files: local layer restored/saved by actions/cache below. (The x-gha
   # provider was removed in vcpkg-tool 2026 and would now fail the install.)
   VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-bincache,readwrite"
@@ -89,9 +97,9 @@ jobs:
         with:
           arch: x64
 
-      # vcpkg package ABI includes the compiler hash. Put cl version in the cache key
-      # so a toolchain drift cannot "hit" a cache that only restores 3 host tools.
-      - name: Detect MSVC version (vcpkg cache key)
+      # Logged for diagnosis only. The vcpkg cache key does not include it: vcpkg's
+      # ABI hashes cover the compiler and the rest of the runner image.
+      - name: Detect MSVC version
         id: msvc
         run: |
           $cl = Get-Command cl.exe -ErrorAction Stop
@@ -127,13 +135,20 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          # Include MSVC version: package ABIs change when cl.exe changes.
-          # Suffix g3 busts the incomplete 110MB cache that only had ~3 packages.
-          # Do NOT restore-keys fall back past -cl… — that matched the old
-          # incomplete aa66… entry (no MSVC in key) and only restored 3 tools.
-          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}-cl${{ steps.msvc.outputs.version }}-g3
+          # Cache entries are immutable, so each run that builds packages saves a
+          # new entry (run id suffix) and later runs restore the newest one. No
+          # compiler version in the key: a runner image update can change vcpkg's
+          # ABI hashes without changing cl.exe, and an exact-match key then could
+          # never be re-saved (run 49: restored, 0 packages reused, save refused).
+          # One entry can hold packages for several runner images.
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-g4-${{ github.run_id }}
+          # Same manifest first; else any entry for this vcpkg + triplet, so a
+          # vcpkg.json change rebuilds only what changed (vcpkg's ABI hashes decide
+          # what is reusable; the prune step drops what stays unused). To force a
+          # cold build, rename the vcpkg-bin prefix in the key and restore-keys.
           restore-keys: |
-            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}-cl${{ steps.msvc.outputs.version }}-
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-g4-
+            vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-
 
       - name: Restore vcpkg tool (pinned)
         id: restore-vcpkg-tool
@@ -262,7 +277,7 @@ jobs:
           Write-Host "Look for 'Restored N package(s)' — N should cover ffmpeg/opencv, not just 3 host tools."
           $log = Join-Path $env:RUNNER_TEMP "vcpkg-install.log"
           & C:/vcpkg/vcpkg.exe install `
-            --triplet x64-windows `
+            --triplet $env:VCPKG_TRIPLET `
             --x-manifest-root=. `
             --x-install-root=build/vcpkg_installed `
             --feature-flags=manifests,versions,binarycaching 2>&1 |
@@ -270,7 +285,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "vcpkg install failed" }
           $text = Get-Content -Raw $log
           # Did we compile anything from source? If yes, bincache has new packages → must save.
-          $built = $text -match 'Building (ffmpeg|opencv)'
+          $built = $text -match '(?m)^Building \S+@'
           "did_build=$built" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           if ($text -match 'Restored (\d+) package\(s\) from .*vcpkg-bincache') {
             Write-Host "Files-cache restore count: $($Matches[1])"
@@ -279,17 +294,31 @@ jobs:
           Write-Host "vcpkg-bincache file count after install: $n"
           "bincache_files=$n" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
-      # Save after install whenever we may have new packages.
-      # IMPORTANT: do not skip merely because restore reported a hit — a hit can
-      # restore a stale/incomplete tree (e.g. 3 host tools) and then we rebuild
-      # ffmpeg without ever updating the cache key.
+      # Keep the archives this run used (ABI hashes in the installed status file)
+      # plus anything built in the last 14 days (e.g. the other runner image while
+      # GitHub rolls out a new one); drop the rest so the cache does not grow with
+      # every image update.
+      - name: Prune vcpkg binary cache
+        if: success() && steps.vcpkg-install.outputs.did_build == 'True'
+        run: |
+          $used = @(Select-String -Path build/vcpkg_installed/vcpkg/status -Pattern '^Abi: (\S+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value })
+          Write-Host "packages in use: $($used.Count)"
+          $cutoff = (Get-Date).AddDays(-14)
+          Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg-bincache" -Recurse -File -Filter *.zip |
+            Where-Object { $_.LastWriteTime -lt $cutoff -and ($used -notcontains $_.BaseName) } |
+            ForEach-Object { Write-Host "prune $($_.Name)"; Remove-Item $_.FullName -Force }
+          $kept = @(Get-ChildItem "$env:GITHUB_WORKSPACE/vcpkg-bincache" -Recurse -File -Filter *.zip)
+          Write-Host "archives kept: $($kept.Count), $([math]::Round(($kept | Measure-Object Length -Sum).Sum / 1MB, 1)) MB"
+
+      # Save right away (survives later failures) whenever anything was built.
       - name: Save vcpkg binary package cache
-        if: success() && (steps.restore-vcpkg-bin.outputs.cache-hit != 'true' || steps.vcpkg-install.outputs.did_build == 'True')
+        if: success() && steps.vcpkg-install.outputs.did_build == 'True'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/vcpkg-bincache
-          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json') }}-cl${{ steps.msvc.outputs.version }}-g3
+          key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json') }}-g4-${{ github.run_id }}
 
       - name: Configure CMake
         run: |
@@ -308,7 +337,7 @@ jobs:
           ) + $archArgs + @(
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
-            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TRIPLET",
             "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR"
           )
           Write-Host "cmake $($cmakeArgs -join ' ')"
@@ -385,12 +414,12 @@ jobs:
 
           # --- vcpkg bin dirs (manifest install) ---
           $vcpkgBins = @(
-            "$env:GITHUB_WORKSPACE/build/vcpkg_installed/x64-windows/bin",
-            "C:/vcpkg/installed/x64-windows/bin"
+            "$env:GITHUB_WORKSPACE/build/vcpkg_installed/$env:VCPKG_TRIPLET/bin",
+            "C:/vcpkg/installed/$env:VCPKG_TRIPLET/bin"
           ) | Where-Object { Test-Path $_ } | ForEach-Object { (Resolve-Path $_).Path }
 
           if (-not $vcpkgBins) {
-            throw "No vcpkg bin directory found (expected build/vcpkg_installed/x64-windows/bin)."
+            throw "No vcpkg bin directory found (expected build/vcpkg_installed/$env:VCPKG_TRIPLET/bin)."
           }
           Write-Host "vcpkg bin search paths:"
           $vcpkgBins | ForEach-Object { Write-Host "  $_" }
@@ -570,8 +599,15 @@ jobs:
             "Notes:"
             "- Portable CI build (not code-signed)."
             "- ML uses ONNX Runtime (DirectML/CPU). CUDA is not redistributed."
+            "- Licence: source code MIT; this build bundles GPL FFmpeg/x264, so the"
+            "  program is distributed under GPLv3. See licenses\NOTICE.txt."
           )
           $readme | Set-Content -Path "$pkg/README.txt" -Encoding UTF8
+
+          # Licence notice + GPL text (the bundled FFmpeg includes GPL x264)
+          New-Item -ItemType Directory -Force -Path "$pkg/licenses" | Out-Null
+          Copy-Item licenses/NOTICE.txt, licenses/GPL-3.0.txt "$pkg/licenses/"
+          Copy-Item LICENSE "$pkg/licenses/LICENSE-MIT.txt"
 
           $total = (Get-ChildItem $pkg -Recurse -File | Measure-Object Length -Sum).Sum
           Write-Host "Package files: $((Get-ChildItem $pkg -Recurse -File).Count)"
@@ -692,28 +728,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-
-      # Draft GitHub Release (main / manual only).
-      # softprops uses the `token` input (default github.token), NOT env GITHUB_TOKEN.
-      # Prefer secret RELEASE_PAT (fine-grained: Contents R/W on this repo, or classic `repo`).
-      # Fallback: github.token works when permissions.contents is write (set above).
-      - name: Create draft release
-        if: github.event_name != 'pull_request'
-        uses: softprops/action-gh-release@v2
-        with:
-          # Empty secret → github.token (needs contents:write). Non-empty PAT preferred.
-          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          draft: true
-          prerelease: false
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          # Never replace an asset that is already on the release: a re-run against a
-          # published version (e.g. a Linux-only change merged after v<ver> shipped)
-          # must not swap the Windows binaries users already downloaded. To refresh a
-          # draft's Windows files, delete them from the draft first.
-          overwrite_files: false
-          files: |
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Portable.zip
-            build/AutoSlides.Extractor-${{ steps.version.outputs.version }}-Windows-x64-Setup.exe

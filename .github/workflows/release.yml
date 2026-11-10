@@ -1,0 +1,86 @@
+# Draft release, on a version tag only:
+#
+#   git tag v2.1.0 && git push origin v2.1.0
+#
+# 1. ci.yml: versions agree, tag == v<CMakeLists version>, CHANGELOG has the entry
+# 2. build-linux / build-macos / build-windows (reusable): build, package, smoke test
+# 3. One job collects all six packages and creates ONE draft release for the tag,
+#    so the platforms can't race each other into duplicate drafts.
+#
+# Publish the draft by hand on GitHub after checking it.
+# Token: secret RELEASE_PAT if set (fine-grained, Contents R/W), else github.token.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  linux:
+    needs: ci
+    uses: ./.github/workflows/build-linux.yml
+
+  macos:
+    needs: ci
+    uses: ./.github/workflows/build-macos.yml
+
+  windows:
+    needs: ci
+    uses: ./.github/workflows/build-windows.yml
+
+  draft-release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: AutoSlides.Extractor-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check package set
+        run: |
+          ls -la dist
+          ver="${GITHUB_REF_NAME#v}"
+          missing=0
+          for f in \
+            "AutoSlides.Extractor-${ver}-Linux-x86_64.AppImage" \
+            "AutoSlides.Extractor-${ver}-Linux-x86_64-Portable.tar.gz" \
+            "AutoSlides.Extractor-${ver}-Linux-x86_64.deb" \
+            "AutoSlides.Extractor-${ver}-macOS-arm64.dmg" \
+            "AutoSlides.Extractor-${ver}-Windows-x64-Portable.zip" \
+            "AutoSlides.Extractor-${ver}-Windows-x64-Setup.exe"; do
+            [ -f "dist/$f" ] || { echo "::error::Missing $f"; missing=1; }
+          done
+          exit $missing
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.RELEASE_PAT != '' && secrets.RELEASE_PAT || github.token }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          # Never replace an asset already on the release, so a re-run against a
+          # published version cannot swap binaries users already downloaded.
+          # To refresh a draft, delete its files first.
+          overwrite_files: false
+          files: dist/*
