@@ -947,18 +947,26 @@ On Windows, vcpkg can provide OpenCV and FFmpeg. The repository includes `vcpkg.
 
 The CMake build checks for vendor ONNX Runtime folders first, then `find_package(onnxruntime)`, then common include/library paths.
 
-Vendor examples:
+The version used by the release builds is pinned, with its SHA-512, in `installer/onnxruntime.json`. The official `Microsoft.ML.OnnxRuntime` package comes from nuget.org; `microsoft/onnxruntime` GitHub releases have been unavailable since November 2026. To fetch it into `vendor/` as CI does:
 
-```text
-vendor/onnxruntime-osx-arm64-1.23.2/
-vendor/onnxruntime-osx-x86_64-1.23.2/
-vendor/onnxruntime-win-x64-1.23.2/
-vendor/onnxruntime-win-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-1.23.2/
+```bash
+python3 installer/fetch-onnxruntime.py --rid osx-arm64   # or linux-x64, win-x64
 ```
 
-*(Note: Prebuilt Windows releases use `onnxruntime-win-x64` with DirectML/CPU support to eliminate CUDA runtime dependencies. If you need CUDA execution on Windows, download the GPU ONNX package when building from source).*
+It creates `vendor/onnxruntime-<rid>-<version>/` with `include/` and `lib/`. CMake reads the version from the pin file; pass `-DONNXRUNTIME_VERSION=<version>` to use a different vendor folder.
+
+Vendor folders CMake recognizes (`<version>` from the pin):
+
+```text
+vendor/onnxruntime-osx-arm64-<version>/
+vendor/onnxruntime-osx-x86_64-<version>/
+vendor/onnxruntime-win-x64-<version>/
+vendor/onnxruntime-win-x64-gpu-<version>/
+vendor/onnxruntime-linux-x64-gpu-<version>/
+vendor/onnxruntime-linux-x64-<version>/
+```
+
+*(Note: Prebuilt Windows releases use `onnxruntime-win-x64` with DirectML/CPU support to eliminate CUDA runtime dependencies. If you need CUDA execution, place the GPU ONNX Runtime package in the `-gpu-` folder when building from source).*
 
 If ONNX Runtime is missing, the app still builds. ML classification and YOLO Auto Crop are disabled.
 

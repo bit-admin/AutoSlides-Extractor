@@ -1,0 +1,6 @@
+{
+  "_comment": "ONNX Runtime pin for the desktop builds, fetched from nuget.org by installer/fetch-onnxruntime.py. sha512 is the base64 packageHash from the nuget.org catalog. CMakeLists.txt reads the version from here.",
+  "package": "Microsoft.ML.OnnxRuntime",
+  "version": "1.23.2",
+  "sha512": "sVAnmG5xfi4JW7YU70jY6z4kSWaCt39tnyRHnqy7QlLIHA4RZ+mBBnzKUKAjhJYyTyPDPy92Wui7MY/kFgs2mA=="
+}

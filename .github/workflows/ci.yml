@@ -8,7 +8,8 @@
 #             licence notices, and the helper's vcpkg.json carries the app version.
 #   lint:     actionlint on the workflows; syntax check of the packaging scripts
 #             (shellcheck at error level for the bash ones, PowerShell parser for
-#             the .ps1) and of the Electron contract test driver.
+#             the .ps1), the Electron contract test driver and the ONNX Runtime
+#             fetch script / pin.
 
 name: CI
 
@@ -141,7 +142,8 @@ jobs:
           bash -n installer/package-helper-linux.sh
           zsh -n installer/package-helper-macos.sh
           shellcheck -S error installer/package-linux.sh installer/package-helper-linux.sh
-          python3 -m py_compile tests/electron_contract.py
+          python3 -m py_compile tests/electron_contract.py installer/fetch-onnxruntime.py
+          python3 installer/fetch-onnxruntime.py --print-env | grep -Eq '^ONNXRUNTIME_VERSION=[0-9]+\.[0-9]+\.[0-9]+$'
 
       - name: PowerShell packaging script
         shell: pwsh

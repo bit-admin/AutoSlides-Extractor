@@ -947,18 +947,26 @@ Windows 可用 vcpkg 提供 OpenCV 和 FFmpeg。仓库中的 `vcpkg.json` 覆盖
 
 CMake 会先检查 `vendor/` 下的平台专用 ONNX Runtime 目录，再尝试 `find_package(onnxruntime)` 和常见 include/lib 路径。
 
-示例：
+发布构建所用的版本及其 SHA-512 固定在 `installer/onnxruntime.json` 中。官方 `Microsoft.ML.OnnxRuntime` 包从 nuget.org 获取（自 2026 年 11 月起，`microsoft/onnxruntime` 的 GitHub Releases 无法访问）。与 CI 相同的获取方式：
 
-```text
-vendor/onnxruntime-osx-arm64-1.23.2/
-vendor/onnxruntime-osx-x86_64-1.23.2/
-vendor/onnxruntime-win-x64-1.23.2/
-vendor/onnxruntime-win-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-1.23.2/
+```bash
+python3 installer/fetch-onnxruntime.py --rid osx-arm64   # 或 linux-x64、win-x64
 ```
 
-*（注：Windows 预构建发布包使用 `onnxruntime-win-x64`（包含 DirectML 和 CPU 支持）以消除 CUDA 运行时依赖。如果从源码构建且需要 Windows 上的 CUDA 支持，请下载 GPU 版本 ONNX 包）。*
+脚本会生成包含 `include/` 与 `lib/` 的 `vendor/onnxruntime-<rid>-<版本>/`。CMake 从固定文件读取版本；如需使用其他 vendor 目录，可传入 `-DONNXRUNTIME_VERSION=<版本>`。
+
+CMake 可识别的 vendor 目录（`<版本>` 取自固定文件）：
+
+```text
+vendor/onnxruntime-osx-arm64-<版本>/
+vendor/onnxruntime-osx-x86_64-<版本>/
+vendor/onnxruntime-win-x64-<版本>/
+vendor/onnxruntime-win-x64-gpu-<版本>/
+vendor/onnxruntime-linux-x64-gpu-<版本>/
+vendor/onnxruntime-linux-x64-<版本>/
+```
+
+*（注：Windows 预构建发布包使用 `onnxruntime-win-x64`（包含 DirectML 和 CPU 支持）以消除 CUDA 运行时依赖。如果从源码构建且需要 CUDA 支持，请将 GPU 版本 ONNX Runtime 包放入 `-gpu-` 目录）。*
 
 如果找不到 ONNX Runtime，应用仍可构建，但 ML 分类和 YOLO Auto Crop 会禁用。
 
