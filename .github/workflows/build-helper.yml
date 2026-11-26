@@ -91,7 +91,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     env:
-      VCPKG_ROOT: ${{ github.workspace }}/ci-vcpkg
+      # Not VCPKG_ROOT: msvc-dev-cmd (vcvars) points that at Visual Studio's
+      # bundled vcpkg on Windows, overriding the job env for later steps.
+      HELPER_VCPKG_ROOT: ${{ github.workspace }}/ci-vcpkg
       VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/helper-bincache,readwrite
       TRIPLET: ${{ matrix.triplet }}
     steps:
@@ -134,6 +136,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force helper-bincache | Out-Null
+          $env:VCPKG_ROOT = $env:HELPER_VCPKG_ROOT
           if ($IsWindows) { & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics }
           else { & "$env:VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics }
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -153,7 +156,8 @@ jobs:
         shell: pwsh
         run: |
           $tool = if ($IsWindows) { 'vcpkg.exe' } else { 'vcpkg' }
-          & "$env:VCPKG_ROOT/$tool" install --triplet "$env:TRIPLET" --overlay-triplets=installer/vcpkg-triplets --x-manifest-root=installer/helper --x-install-root=build/vcpkg_installed --clean-after-build
+          $env:VCPKG_ROOT = $env:HELPER_VCPKG_ROOT
+          & "$env:VCPKG_ROOT/$tool" install --vcpkg-root "$env:VCPKG_ROOT" --triplet "$env:TRIPLET" --overlay-triplets=installer/vcpkg-triplets --x-manifest-root=installer/helper --x-install-root=build/vcpkg_installed --clean-after-build
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # Save expensive cold builds even if a later packaging/test step fails.
@@ -167,6 +171,7 @@ jobs:
       - name: Configure and build only AutoSlidesExtractorHelper
         shell: pwsh
         run: |
+          $env:VCPKG_ROOT = $env:HELPER_VCPKG_ROOT
           $root = $env:GITHUB_WORKSPACE.Replace('\','/')
           $prefix = "$root/build/vcpkg_installed/$env:TRIPLET"
           $opts = @('-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DAUTOSLIDES_ELECTRON_HELPER=ON',
