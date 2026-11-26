@@ -1,0 +1,266 @@
+# Build + package AutoSlidesExtractorHelper, the extraction-only CLI that the
+# Electron app downloads and manages itself (not the desktop app).
+#
+#   - own vcpkg manifest (installer/helper/vcpkg.json: LGPL FFmpeg, PNG-only
+#     OpenCV), same vcpkg pin as the desktop builds (ci.yml checks the pins agree)
+#   - packaging: installer/package-helper-{macos.sh,linux.sh,windows.ps1}
+#   - smoke: a separate job unpacks each archive on a fresh runner (no Qt, vcpkg
+#     or display) and runs tests/electron_contract.py --helper
+#
+# Artifacts: AutoSlidesExtractorHelper-<platform> containing
+#   AutoSlidesExtractorHelper-<ver>-<platform>.{tar.gz,zip}
+# Release: none here. A v<ver> tag runs release.yml, which calls this workflow,
+#   runs the full-vs-helper A/B contract and attaches the archives plus
+#   AutoSlidesExtractorHelper-manifest.json to the same draft release.
+name: Build Electron helper
+
+on:
+  push:
+    branches: [main]
+    # Keep in sync with pull_request below.
+    paths:
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'installer/helper/**'
+      - '!installer/helper/README.md'
+      - 'installer/package-helper-*'
+      - 'installer/vcpkg-triplets/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'tests/electron_contract.py'
+      - '.github/workflows/build-helper.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - 'installer/helper/**'
+      - '!installer/helper/README.md'
+      - 'installer/package-helper-*'
+      - 'installer/vcpkg-triplets/**'
+      - 'licenses/**'
+      - 'LICENSE'
+      - 'tests/electron_contract.py'
+      - '.github/workflows/build-helper.yml'
+  workflow_dispatch:
+  # release.yml calls this on a v* tag.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # github.workflow differs when called from release.yml, so the release run
+  # never queues behind (or blocks) a push build of the same ref.
+  group: helper-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  QT_VERSION: '6.8.3'
+  # Same pin as build-macos.yml / build-linux.yml / build-windows.yml (ci.yml
+  # checks). Same ports as the desktop build, NOT the same manifest or install.
+  VCPKG_COMMIT: '2026.07.29'
+  VCPKG_DISABLE_METRICS: '1'
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+
+jobs:
+  package:
+    name: Package / ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux-x86_64
+            runner: ubuntu-22.04
+            triplet: x64-linux-dynamic-release
+            qt_host: linux
+            qt_arch: linux_gcc_64
+            qt_archives: qtbase icu
+          - platform: macOS-arm64
+            runner: macos-15
+            triplet: arm64-osx-dynamic-release
+            qt_host: mac
+            qt_arch: clang_64
+            qt_archives: qtbase
+          - platform: Windows-x64
+            runner: windows-2022
+            triplet: x64-windows-release
+            qt_host: windows
+            qt_arch: win64_msvc2022_64
+            qt_archives: qtbase
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/ci-vcpkg
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}/helper-bincache,readwrite
+      TRIPLET: ${{ matrix.triplet }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_COMMIT }}
+          path: ci-vcpkg
+          persist-credentials: false
+
+      - name: Set up MSVC x64
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Linux build and packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm autoconf autoconf-archive automake libtool patchelf binutils
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install ninja pkgconf
+
+      - name: Install Qt (no desktop plugins deployed)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt_host }}
+          target: desktop
+          arch: ${{ matrix.qt_arch }}
+          archives: ${{ matrix.qt_archives }}
+          cache: true
+          cache-key-prefix: helper-qt-${{ env.QT_VERSION }}-${{ matrix.platform }}
+
+      - name: Bootstrap vcpkg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force helper-bincache | Out-Null
+          if ($IsWindows) { & "$env:VCPKG_ROOT/bootstrap-vcpkg.bat" -disableMetrics }
+          else { & "$env:VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "runner_image=$env:ImageVersion" >> $env:GITHUB_OUTPUT
+        id: bootstrap
+
+      - name: Restore helper dependency cache
+        uses: actions/cache/restore@v4
+        id: deps
+        with:
+          path: helper-bincache
+          key: helper-v1-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('installer/helper/vcpkg.json', 'installer/vcpkg-triplets/*.cmake') }}-${{ steps.bootstrap.outputs.runner_image }}
+          restore-keys: |
+            helper-v1-${{ matrix.triplet }}-${{ env.VCPKG_COMMIT }}-
+
+      - name: Build dependencies from the extraction-only manifest
+        shell: pwsh
+        run: |
+          $tool = if ($IsWindows) { 'vcpkg.exe' } else { 'vcpkg' }
+          & "$env:VCPKG_ROOT/$tool" install --triplet "$env:TRIPLET" --overlay-triplets=installer/vcpkg-triplets --x-manifest-root=installer/helper --x-install-root=build/vcpkg_installed --clean-after-build
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # Save expensive cold builds even if a later packaging/test step fails.
+      - name: Save helper dependency cache
+        if: steps.deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: helper-bincache
+          key: ${{ steps.deps.outputs.cache-primary-key }}
+
+      - name: Configure and build only AutoSlidesExtractorHelper
+        shell: pwsh
+        run: |
+          $root = $env:GITHUB_WORKSPACE.Replace('\','/')
+          $prefix = "$root/build/vcpkg_installed/$env:TRIPLET"
+          $opts = @('-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DAUTOSLIDES_ELECTRON_HELPER=ON',
+                    "-DCMAKE_TOOLCHAIN_FILE=$root/ci-vcpkg/scripts/buildsystems/vcpkg.cmake",
+                    "-DVCPKG_MANIFEST_DIR=$root/installer/helper", '-DVCPKG_MANIFEST_INSTALL=OFF',
+                    "-DVCPKG_INSTALLED_DIR=$root/build/vcpkg_installed", "-DVCPKG_TARGET_TRIPLET=$env:TRIPLET",
+                    "-DVCPKG_OVERLAY_TRIPLETS=$root/installer/vcpkg-triplets", "-DCMAKE_PREFIX_PATH=$env:QT_ROOT_DIR")
+          if (!$IsWindows) {
+            $env:PKG_CONFIG_PATH = ''
+            $env:PKG_CONFIG_LIBDIR = "$prefix/lib/pkgconfig"
+          }
+          if ($IsMacOS) {
+            $opts += @('-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local', '-DCMAKE_OSX_ARCHITECTURES=arm64', '-DCMAKE_OSX_DEPLOYMENT_TARGET=12.0')
+          } else { $opts += '-DCOMPILER_SUPPORTS_AVX512=OFF' }
+          cmake -S . -B build @opts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build --target AutoSlidesExtractorHelper --parallel
+
+      - name: Package relocatable helper and licence notices
+        shell: pwsh
+        run: |
+          $env:QT_PATH = $env:QT_ROOT_DIR
+          $env:VCPKG_PREFIX = "$env:GITHUB_WORKSPACE/build/vcpkg_installed/$env:TRIPLET"
+          $env:OUT_DIR = "$env:GITHUB_WORKSPACE/dist-helper"
+          if ($IsMacOS) { zsh ./installer/package-helper-macos.sh build }
+          elseif ($IsLinux) { bash ./installer/package-helper-linux.sh build }
+          else { & ./installer/package-helper-windows.ps1 -BuildDir build -QtPath $env:QT_PATH -VcpkgPrefix $env:VCPKG_PREFIX -OutDir $env:OUT_DIR }
+
+      - name: Upload helper archive (not a desktop release asset)
+        uses: actions/upload-artifact@v4
+        with:
+          name: AutoSlidesExtractorHelper-${{ matrix.platform }}
+          path: dist-helper/AutoSlidesExtractorHelper-*-${{ matrix.platform }}.*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  smoke:
+    name: Test unpacked archive / ${{ matrix.platform }}
+    needs: package
+    # Test available platforms even if a different platform's build failed.
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: Linux-x86_64, runner: ubuntu-22.04}
+          - {platform: macOS-arm64, runner: macos-15}
+          - {platform: Windows-x64, runner: windows-2022}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: AutoSlidesExtractorHelper-${{ matrix.platform }}
+          path: archives
+
+      # Only the test driver needs the ffmpeg CLI (for generating and reading
+      # fixtures). This fresh runner never installed the build's Qt or vcpkg tree.
+      - name: Install fixture tool (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install fixture tool (macOS)
+        if: runner.os == 'macOS'
+        run: command -v ffmpeg >/dev/null || brew install ffmpeg
+      - name: Install fixture tool (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress }
+
+      - name: Run Electron contract without a display or build tree
+        shell: pwsh
+        run: |
+          $archives = @(Get-ChildItem archives -File)
+          if ($archives.Count -ne 1) { throw 'Expected exactly one helper archive' }
+          $archive = $archives[0]
+          $dest = New-Item -Type Directory -Path 'unpacked helper'
+          $exe = 'AutoSlidesExtractorHelper'
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath $archive.FullName -DestinationPath $dest.FullName
+            $exe += '.exe'
+          } else {
+            tar -xzf $archive.FullName -C $dest.FullName
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          foreach ($var in 'DISPLAY','WAYLAND_DISPLAY','QT_PLUGIN_PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH') {
+            Remove-Item "Env:$var" -ErrorAction SilentlyContinue
+          }
+          python -I tests/electron_contract.py --helper "$($dest.FullName)/AutoSlidesExtractorHelper/$exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $sha = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "**$($archive.Name)** — $($archive.Length) bytes, SHA-256: ``$sha``" >> $env:GITHUB_STEP_SUMMARY

@@ -127,6 +127,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 - **macOS**：仅支持 Apple Silicon（arm64）。打开 `AutoSlides.Extractor-<版本>-macOS-arm64.dmg`，将 **AutoSlides Extractor** 拖到 **Applications**（应用程序）链接上。应用为 ad-hoc 签名（未经公证），安装后需清除一次隔离属性（见下方 Gatekeeper 提示）。Intel Mac 可从源码构建。
 - **Windows**：使用安装器或便携压缩包。预构建 Windows 发布包采用 DirectML 和 CPU ONNX Runtime 提供 GPU 硬件加速，无需额外安装或捆绑 CUDA 驱动与 DLL。
 - **Linux**：Debian/Ubuntu 可使用 `sudo apt install ./AutoSlides.Extractor-<版本>-Linux-x86_64.deb` 安装 `.deb`（安装到 `/opt/autoslides-extractor`，并添加菜单项与 `AutoSlidesExtractor` 命令）。其他发行版使用 `.AppImage`（先 `chmod +x` 再运行）或便携 `.tar.gz`（解压后运行 `./AutoSlidesExtractor`）。预构建 Linux 发布包面向支持 AVX2 的 x86_64 CPU 与 glibc 2.35+（Ubuntu 22.04、Debian 12、Fedora 36 或更新版本），使用 CPU ONNX Runtime。如果 AppImage 提示 FUSE 错误，请安装 `libfuse2`，或使用 `--appimage-extract-and-run` 运行。其他系统可从源码构建。
+- **`AutoSlidesExtractorHelper-*` 压缩包与 `AutoSlidesExtractorHelper-manifest.json`**：仅用于提取的精简版，由 Electron 应用自行下载和更新，桌面版用户无需下载。详见[精简版指南](installer/helper/README.md#releases)。
 
 ### macOS Gatekeeper 提示
 
@@ -882,6 +883,8 @@ slides_Lecture01/slide_Lecture01_001.jpg
 9. **复核与导出**：Slides Review 提供恢复、删除、裁剪和清理；Slides Export 生成 PDF。
 
 ## 从源码构建
+
+macOS arm64、Windows x64 和 Linux x86-64 上的 Electron 应用可使用单独打包的 **AutoSlidesExtractorHelper**，以无界面方式提取兼容模式的 PNG 和时间线。构建步骤与调用示例见[精简版构建与集成指南](installer/helper/README.md)。下方默认构建仍生成完整桌面版。
 
 ### 依赖
 

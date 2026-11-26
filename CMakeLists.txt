@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 2.1.0 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 2.2.0 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -106,6 +106,8 @@ endif()
 
 message(STATUS "Detected CPU architecture: ${CPU_ARCH}")
 
+option(AUTOSLIDES_ELECTRON_HELPER "Build the headless PNG extractor instead of the desktop application" OFF)
+
 # SIMD Detection and Configuration
 set(SIMD_FLAGS "")
 set(SIMD_DEFINITIONS "")
@@ -116,6 +118,10 @@ if(CPU_ARCH STREQUAL "ARM64")
     list(APPEND SIMD_DEFINITIONS "-DNEON_AVAILABLE")
     message(STATUS "Enabled NEON SIMD support")
 
+elseif(AUTOSLIDES_ELECTRON_HELPER AND MSVC)
+    # The distributed x64 helper targets the MSVC baseline, not the CI CPU.
+    # Do not probe GCC -m flags (or enable unconditional AVX instructions).
+    message(STATUS "Using baseline MSVC x64 instructions for the portable helper")
 elseif(CPU_ARCH STREQUAL "x86_64" OR CPU_ARCH STREQUAL "x86")
     # x86/x64 SIMD detection
     check_cxx_compiler_flag("-msse4.2" COMPILER_SUPPORTS_SSE42)
@@ -135,6 +141,45 @@ elseif(CPU_ARCH STREQUAL "x86_64" OR CPU_ARCH STREQUAL "x86")
         list(APPEND SIMD_DEFINITIONS "-DSSE42_AVAILABLE")
         message(STATUS "Enabled SSE4.2 SIMD support")
     endif()
+endif()
+
+# Both profiles compile the same decoder, detector and image/timeline writer.
+set(EXTRACTION_SOURCES
+    src/main.cpp src/clirunner.cpp src/configmanager.cpp src/videoqueue.cpp
+    src/processingthread.cpp src/videoprocessor.cpp src/hardwaredecoder.cpp
+    src/ssimcalculator.cpp src/slidedetector.cpp src/chunkprocessor.cpp
+    src/memoryoptimizer.cpp src/timelinemetadata.cpp
+)
+
+if(AUTOSLIDES_ELECTRON_HELPER)
+    find_package(Qt6 REQUIRED COMPONENTS Core)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+    qt6_standard_project_setup()
+    add_executable(AutoSlidesExtractorHelper ${EXTRACTION_SOURCES})
+    if(WIN32)
+        # Use the pinned vcpkg port's FindFFMPEG module; pkg-config is not a
+        # prerequisite of the MSVC build. Link just the four decoder imports.
+        find_package(FFMPEG REQUIRED)
+        foreach(component IN ITEMS avformat avcodec avutil swscale)
+            if(NOT FFMPEG_lib${component}_LIBRARY)
+                message(FATAL_ERROR "Missing FFmpeg import library: ${component}")
+            endif()
+            target_link_libraries(AutoSlidesExtractorHelper PRIVATE ${FFMPEG_lib${component}_LIBRARY})
+        endforeach()
+        target_include_directories(AutoSlidesExtractorHelper PRIVATE ${FFMPEG_INCLUDE_DIRS})
+        set_target_properties(AutoSlidesExtractorHelper PROPERTIES WIN32_EXECUTABLE FALSE)
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(DECODE REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
+        target_link_libraries(AutoSlidesExtractorHelper PRIVATE PkgConfig::DECODE)
+    endif()
+    target_compile_definitions(AutoSlidesExtractorHelper PRIVATE
+        AUTOSLIDES_ELECTRON_HELPER AUTOSLIDES_HELPER_VERSION="${PROJECT_VERSION}" ${SIMD_DEFINITIONS})
+    set_target_properties(AutoSlidesExtractorHelper PROPERTIES COMPILE_FLAGS "${SIMD_FLAGS}")
+    target_link_libraries(AutoSlidesExtractorHelper PRIVATE Qt6::Core ${OpenCV_LIBS})
+    target_include_directories(AutoSlidesExtractorHelper PRIVATE ${OpenCV_INCLUDE_DIRS})
+    install(TARGETS AutoSlidesExtractorHelper RUNTIME DESTINATION bin)
+    return() # No desktop dependency discovery, Qt GUI deployment, or embedded models.
 endif()
 
 # Find required packages
@@ -424,26 +469,16 @@ qt6_standard_project_setup()
 
 # Source files
 set(SOURCES
-    src/main.cpp
+    ${EXTRACTION_SOURCES}
     src/mainwindow.cpp
     src/settingsdialog.cpp
     src/rangeslider.cpp
     src/styledslider.cpp
-    src/videoprocessor.cpp
-    src/hardwaredecoder.cpp
-    src/ssimcalculator.cpp
-    src/slidedetector.cpp
-    src/configmanager.cpp
-    src/videoqueue.cpp
-    src/processingthread.cpp
-    src/chunkprocessor.cpp
-    src/memoryoptimizer.cpp
     src/processingpipeline.cpp
     src/naturalsorter.cpp
     src/phashcalculator.cpp
     src/trashmanager.cpp
     src/trashmetadata.cpp
-    src/timelinemetadata.cpp
     src/cropmetadata.cpp
     src/cropmanager.cpp
     src/cropimageview.cpp
@@ -461,7 +496,6 @@ set(SOURCES
     src/processingtab.cpp
     src/postprocessingtab.cpp
     src/mlclassificationtab.cpp
-    src/clirunner.cpp
     src/cliinstaller.cpp
 )
 

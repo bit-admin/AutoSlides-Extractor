@@ -1,0 +1,9 @@
+{
+  "name": "autoslides-extractor-helper",
+  "version": "2.2.0",
+  "description": "Runtime dependencies for compatible PNG extraction only",
+  "dependencies": [
+    { "name": "opencv4", "default-features": false, "features": ["png"] },
+    { "name": "ffmpeg", "default-features": false, "features": ["avcodec", "avformat", "swscale"] }
+  ]
+}

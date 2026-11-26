@@ -7,10 +7,19 @@
 #include <QStandardPaths>
 #include <QDebug>
 #include <QElapsedTimer>
+#include <QScopeGuard>
 #include <thread>
 #include <functional>
 
 namespace {
+// The standalone helper promises that every reported slide and requested
+// timeline reached disk. Keep the full app's best-effort output policy.
+#ifdef AUTOSLIDES_ELECTRON_HELPER
+constexpr bool kRequireOutput = true;
+#else
+constexpr bool kRequireOutput = false;
+#endif
+
 // Compatibility-mode helper: external (Electron) consumers feed in
 // `screen_<name>.mp4` and expect outputs without the `screen_` prefix.
 QString stripScreenPrefix(const QString& name)
@@ -239,6 +248,7 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         // Step 2: Initialize processing state for chunk-based processing
         m_processingState.reset();
         m_producerFinished = false;
+        m_consumerFailed = false;
         m_currentExtractionProgress = 0.0;
 
         // Estimate total frames that will be extracted (duration / 2 second interval)
@@ -253,8 +263,10 @@ bool ProcessingThread::processVideoWithChunks(VideoQueueItem* video, int videoIn
         video->outputDirectory = outputDir;  // Store for post-processing
         if (m_config.writeTimeline) {
             // Lets Slides Export find the audio for a video export later
-            TimelineMetadata::setSource(outputDir, QFileInfo(video->filePath).absoluteFilePath(),
-                                        videoInfo.duration, videoInfo.startTime);
+            if (!TimelineMetadata::setSource(outputDir, QFileInfo(video->filePath).absoluteFilePath(),
+                                             videoInfo.duration, videoInfo.startTime) && kRequireOutput) {
+                throw std::runtime_error("Failed to write timeline source: " + outputDir.toStdString());
+            }
         }
         QFileInfo videoFileInfo(video->filePath);
         QString videoName = videoFileInfo.baseName();
@@ -395,6 +407,12 @@ QString ProcessingThread::getTempDirectory()
 
 void ProcessingThread::producerThread(const std::string& videoPath, int chunkSize)
 {
+    // Always release the consumer, even if open fails or zero frames decode.
+    const auto finishProducer = qScopeGuard([this] {
+        QMutexLocker locker(&m_queueMutex);
+        m_producerFinished = true;
+        m_queueNotEmpty.wakeOne();
+    });
     try {
         // Create hardware decoder for chunk-based extraction
         HardwareDecoder decoder;
@@ -405,13 +423,14 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
             m_currentDecoder = &decoder;
         }
 
+        const auto unregisterDecoder = qScopeGuard([this] {
+            QMutexLocker locker(&m_decoderMutex);
+            m_currentDecoder = nullptr;
+        });
+
         if (!decoder.openVideo(videoPath)) {
             QMutexLocker locker(&m_mutex);
             m_currentError = "Failed to open video for chunk extraction";
-
-            // Unregister decoder
-            QMutexLocker decoderLocker(&m_decoderMutex);
-            m_currentDecoder = nullptr;
             return;
         }
 
@@ -434,12 +453,11 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
             // Wait for queue to be empty (capacity = 1)
             {
                 QMutexLocker locker(&m_queueMutex);
-                while (m_sharedQueue != nullptr) {
-                    // Check for stop/pause while waiting
-                    if (m_shouldStop || m_shouldPause) {
-                        return;
-                    }
+                while (m_sharedQueue && !m_consumerFailed && !m_shouldStop && !m_shouldPause) {
                     m_queueNotFull.wait(&m_queueMutex);
+                }
+                if (m_consumerFailed || m_shouldStop || m_shouldPause) {
+                    return;
                 }
 
                 // Put chunk into queue
@@ -473,11 +491,9 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
 
         if (totalFrames <= 0) {
             QMutexLocker locker(&m_mutex);
-            m_currentError = "No frames extracted from video";
-
-            // Unregister decoder
-            QMutexLocker decoderLocker(&m_decoderMutex);
-            m_currentDecoder = nullptr;
+            if (m_currentError.isEmpty()) {
+                m_currentError = "No frames extracted from video";
+            }
             return;
         }
 
@@ -491,33 +507,11 @@ void ProcessingThread::producerThread(const std::string& videoPath, int chunkSiz
         // Emit final 100% progress for frame extraction
         emit frameExtractionProgress(m_currentVideoIndex, 100.0);
 
-        // Mark producer as finished
-        {
-            QMutexLocker locker(&m_queueMutex);
-            m_producerFinished = true;
-            m_queueNotEmpty.wakeOne();  // Wake consumer in case it's waiting
-        }
-
-        decoder.close();
-
-        // Unregister decoder
-        {
-            QMutexLocker locker(&m_decoderMutex);
-            m_currentDecoder = nullptr;
-        }
-
     } catch (const std::exception& e) {
         QMutexLocker locker(&m_mutex);
-        m_currentError = QString("Producer thread error: %1").arg(e.what());
-
-        // Mark producer as finished even on error
-        QMutexLocker queueLocker(&m_queueMutex);
-        m_producerFinished = true;
-        m_queueNotEmpty.wakeOne();
-
-        // Unregister decoder
-        QMutexLocker decoderLocker(&m_decoderMutex);
-        m_currentDecoder = nullptr;
+        if (m_currentError.isEmpty()) {
+            m_currentError = QString("Producer thread error: %1").arg(e.what());
+        }
     }
 }
 
@@ -621,6 +615,9 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
 
                         if (!ImageIOHelper::imwriteUnicode(filePath, selectedFrames[i], compression_params)) {
                             QString errorMsg = QString("Failed to save slide: %1").arg(filePath);
+                            if (kRequireOutput) {
+                                throw std::runtime_error(errorMsg.toStdString());
+                            }
                             emit videoInfoLogged(videoIndex, errorMsg);
                         } else if (m_config.writeTimeline) {
                             // Match confirmed timing for this global index (parallel to selected indices)
@@ -634,7 +631,10 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
                                     break;
                                 }
                             }
-                            TimelineMetadata::addConfirmedCapture(outputDir, changeAt, confirmedAt, fileName);
+                            if (!TimelineMetadata::addConfirmedCapture(outputDir, changeAt, confirmedAt, fileName)
+                                && kRequireOutput) {
+                                throw std::runtime_error("Failed to write timeline capture: " + filePath.toStdString());
+                            }
                         }
                     }
                 }
@@ -667,8 +667,17 @@ void ProcessingThread::consumerThread(int videoIndex, const QString& outputDir, 
         }
 
     } catch (const std::exception& e) {
-        QMutexLocker locker(&m_mutex);
-        m_currentError = QString("Consumer thread error: %1").arg(e.what());
+        {
+            QMutexLocker locker(&m_mutex);
+            m_currentError = QString("Consumer thread error: %1").arg(e.what());
+        }
+        // The producer may be blocked handing off the next chunk. Abort this
+        // video (not the entire queue) and preserve the original write error.
+        {
+            QMutexLocker locker(&m_queueMutex);
+            m_consumerFailed = true;
+        }
+        wakeWorkers();
     }
 }
 

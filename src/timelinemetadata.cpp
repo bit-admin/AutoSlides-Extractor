@@ -177,9 +177,8 @@ bool TimelineMetadata::save(const QString& slidesDir, const TimelineData& data)
     }
     root.insert(QStringLiteral("resolutions"), resObj);
 
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    file.close();
-    return true;
+    const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    return file.write(json) == json.size() && file.flush();
 }
 
 bool TimelineMetadata::addConfirmedCapture(const QString& slidesDir,

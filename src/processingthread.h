@@ -182,6 +182,7 @@ private:
     QWaitCondition m_queueNotEmpty;
     std::unique_ptr<FrameChunk> m_sharedQueue;  // Capacity = 1 queue
     bool m_producerFinished;
+    bool m_consumerFailed = false;  // Protected by m_queueMutex while workers are running
     int m_totalFramesExtracted;  // Total frames that will be extracted (set by producer)
     double m_currentExtractionProgress;  // Current frame extraction progress (0-100)
 

@@ -36,11 +36,13 @@ name: Build Linux Release
 on:
   push:
     branches: [main]
-    # Docs-only changes skip the (long) package build.
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    # Docs-only and Electron-helper-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
   # release.yml calls this on a v* tag and publishes the artifacts to one draft.

@@ -1,11 +1,20 @@
 # Draft release, on a version tag only:
 #
-#   git tag v2.1.0 && git push origin v2.1.0
+#   git tag v2.2.0 && git push origin v2.2.0
 #
 # 1. ci.yml: versions agree, tag == v<CMakeLists version>, CHANGELOG has the entry
 # 2. build-linux / build-macos / build-windows (reusable): build, package, smoke test
-# 3. One job collects all six packages and creates ONE draft release for the tag,
-#    so the platforms can't race each other into duplicate drafts.
+#    build-helper (reusable): Electron helper archives, smoke-tested unpacked
+# 3. contract: per platform, tests/electron_contract.py runs the desktop package
+#    AND the helper on the same runner and requires identical slides and timings
+# 4. One job collects the six desktop packages, the three helper archives, writes
+#    AutoSlidesExtractorHelper-manifest.json (what the Electron app downloads:
+#    per-platform URL, size, SHA-256, executable path) and SHA256SUMS.txt, and
+#    creates ONE draft release for the tag, so nothing races into duplicate drafts.
+#
+# Electron can always find the newest published helper at the stable URL
+#   https://github.com/<owner>/<repo>/releases/latest/download/AutoSlidesExtractorHelper-manifest.json
+# (drafts and pre-releases are not "latest"); the URLs inside are versioned.
 #
 # Publish the draft by hand on GitHub after checking it.
 # Token: secret RELEASE_PAT if set (fine-grained, Contents R/W), else github.token.
@@ -39,8 +48,96 @@ jobs:
     needs: ci
     uses: ./.github/workflows/build-windows.yml
 
+  helper:
+    needs: ci
+    uses: ./.github/workflows/build-helper.yml
+
+  # Desktop CLI vs helper on the same machine and decoder backend: same PNG
+  # names, decoded pixels, counts and timeline timings, on the shipped packages.
+  contract:
+    name: Electron contract A/B / ${{ matrix.platform }}
+    needs: [linux, macos, windows, helper]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: Linux-x86_64, runner: ubuntu-22.04, desktop: Linux-x86_64-Portable}
+          - {platform: macOS-arm64, runner: macos-15, desktop: macOS-arm64}
+          - {platform: Windows-x64, runner: windows-2022, desktop: Windows-x64-Portable}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Version from tag
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-${{ matrix.desktop }}
+          path: desktop
+      - uses: actions/download-artifact@v4
+        with:
+          name: AutoSlidesExtractorHelper-${{ matrix.platform }}
+          path: helper
+
+      - name: Install fixture tool (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install fixture tool (macOS)
+        if: runner.os == 'macOS'
+        run: command -v ffmpeg >/dev/null || brew install ffmpeg
+      - name: Install fixture tool (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (!(Get-Command ffmpeg.exe -ErrorAction SilentlyContinue)) { choco install ffmpeg -y --no-progress }
+
+      - name: Unpack both packages and run the A/B contract
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $full = (New-Item -Type Directory -Path 'unpacked full').FullName
+          $help = (New-Item -Type Directory -Path 'unpacked helper').FullName
+          $desktop = @(Get-ChildItem desktop -File)
+          $archive = @(Get-ChildItem helper -File)
+          if ($desktop.Count -ne 1 -or $archive.Count -ne 1) { throw 'Expected one desktop package and one helper archive' }
+          if ($IsWindows) {
+            Expand-Archive -LiteralPath $desktop[0].FullName -DestinationPath $full
+            Expand-Archive -LiteralPath $archive[0].FullName -DestinationPath $help
+            $fullExe = "$full/AutoSlidesExtractor.exe"
+            $helperExe = "$help/AutoSlidesExtractorHelper/AutoSlidesExtractorHelper.exe"
+          } else {
+            tar -xzf $archive[0].FullName -C $help
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $helperExe = "$help/AutoSlidesExtractorHelper/AutoSlidesExtractorHelper"
+            if ($IsMacOS) {
+              $mnt = (New-Item -Type Directory -Path "$env:RUNNER_TEMP/dmg").FullName
+              hdiutil attach $desktop[0].FullName -readonly -nobrowse -mountpoint $mnt
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+              ditto "$mnt/AutoSlides Extractor.app" "$full/AutoSlides Extractor.app"
+              $rc = $LASTEXITCODE
+              hdiutil detach $mnt -force
+              if ($rc) { exit $rc }
+              $fullExe = "$full/AutoSlides Extractor.app/Contents/MacOS/AutoSlidesExtractor"
+            } else {
+              tar -xzf $desktop[0].FullName -C $full
+              if ($LASTEXITCODE) { exit $LASTEXITCODE }
+              $fullExe = "$full/AutoSlides.Extractor-$env:APP_VERSION-Linux-x86_64/AutoSlidesExtractor"
+            }
+          }
+          foreach ($var in 'DISPLAY','WAYLAND_DISPLAY','QT_PLUGIN_PATH','LD_LIBRARY_PATH','DYLD_LIBRARY_PATH') {
+            Remove-Item "Env:$var" -ErrorAction SilentlyContinue
+          }
+          python -I tests/electron_contract.py --full $fullExe --helper $helperExe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
   draft-release:
-    needs: [linux, macos, windows]
+    needs: [linux, macos, windows, helper, contract]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -50,6 +147,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: AutoSlides.Extractor-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download Electron helper archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: AutoSlidesExtractorHelper-*
           path: dist
           merge-multiple: true
 
@@ -64,10 +168,52 @@ jobs:
             "AutoSlides.Extractor-${ver}-Linux-x86_64.deb" \
             "AutoSlides.Extractor-${ver}-macOS-arm64.dmg" \
             "AutoSlides.Extractor-${ver}-Windows-x64-Portable.zip" \
-            "AutoSlides.Extractor-${ver}-Windows-x64-Setup.exe"; do
+            "AutoSlides.Extractor-${ver}-Windows-x64-Setup.exe" \
+            "AutoSlidesExtractorHelper-${ver}-Linux-x86_64.tar.gz" \
+            "AutoSlidesExtractorHelper-${ver}-macOS-arm64.tar.gz" \
+            "AutoSlidesExtractorHelper-${ver}-Windows-x64.zip"; do
             [ -f "dist/$f" ] || { echo "::error::Missing $f"; missing=1; }
           done
+          [ "$(find dist -type f | wc -l)" -eq 9 ] || { echo "::error::Unexpected extra files in dist"; missing=1; }
           exit $missing
+
+      # Keys are Node's `${process.platform}-${process.arch}`, so the Electron
+      # app can index the manifest directly. Bump schemaVersion only for an
+      # incompatible manifest change; cliSchemaVersion is the NDJSON "v" field.
+      - name: Write helper manifest and checksums
+        shell: python
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          import hashlib, json, os
+          tag = os.environ["GITHUB_REF_NAME"]
+          ver = tag[1:]
+          base = f"https://github.com/{os.environ['REPO']}/releases/download/{tag}"
+          platforms = {
+              "darwin-arm64": ("macOS-arm64.tar.gz", "tar.gz", "AutoSlidesExtractorHelper/AutoSlidesExtractorHelper"),
+              "linux-x64": ("Linux-x86_64.tar.gz", "tar.gz", "AutoSlidesExtractorHelper/AutoSlidesExtractorHelper"),
+              "win32-x64": ("Windows-x64.zip", "zip", "AutoSlidesExtractorHelper/AutoSlidesExtractorHelper.exe"),
+          }
+          def sha256(path):
+              h = hashlib.sha256()
+              with open(path, "rb") as f:
+                  for block in iter(lambda: f.read(1 << 20), b""):
+                      h.update(block)
+              return h.hexdigest()
+          manifest = {"schemaVersion": 1, "name": "AutoSlidesExtractorHelper", "version": ver,
+                      "tag": tag, "cliSchemaVersion": 1, "platforms": {}}
+          for key, (suffix, fmt, exe) in platforms.items():
+              name = f"AutoSlidesExtractorHelper-{ver}-{suffix}"
+              path = os.path.join("dist", name)
+              manifest["platforms"][key] = {"file": name, "url": f"{base}/{name}", "size": os.path.getsize(path),
+                                            "sha256": sha256(path), "format": fmt, "executable": exe}
+          with open("dist/AutoSlidesExtractorHelper-manifest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          names = sorted(os.listdir("dist"))
+          with open("dist/SHA256SUMS.txt", "w", encoding="utf-8") as f:
+              f.writelines(f"{sha256(os.path.join('dist', n))}  {n}\n" for n in names)
+          print(json.dumps(manifest, indent=2))
 
       - name: Create draft release
         uses: softprops/action-gh-release@v2

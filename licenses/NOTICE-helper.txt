@@ -1,0 +1,24 @@
+AutoSlides Extractor Helper - macOS runtime notice
+=================================================
+
+The helper source code is licensed under the MIT License (LICENSE-MIT.txt).
+QtCore is dynamically linked and used under the GNU Lesser General Public
+License version 3 (LGPL-3.0.txt, incorporating GPL-3.0.txt). You may replace
+the bundled shared libraries with compatible modified versions and reverse
+engineer the combined work to debug such modifications. If macOS requires it,
+re-sign the changed dylib or framework, e.g. codesign --force --sign - FILE.
+Qt source and third-party attributions: https://download.qt.io/archive/qt/
+and https://doc.qt.io/qt-6/qtcore-attribution.html .
+
+The ffmpeg.txt and opencv4.txt files are the licence texts installed by the
+corresponding vcpkg ports. Other bundled vcpkg libraries have their own
+<port>.txt files here. The Apple system frameworks are not redistributed.
+
+Helper source and build configuration:
+  https://github.com/bit-admin/AutoSlides-Extractor
+QtCore source: https://code.qt.io/cgit/qt/qtbase.git/
+FFmpeg source: https://ffmpeg.org/download.html
+OpenCV source: https://github.com/opencv/opencv
+Port source versions, patches and build recipes: https://github.com/microsoft/vcpkg/tree/2026.07.29/ports
+
+FFmpeg build in this archive:

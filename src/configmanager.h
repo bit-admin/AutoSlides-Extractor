@@ -173,6 +173,7 @@ public:
      */
     static SSIMPreset getPresetFromName(const QString& name);
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
     /**
      * Load exclusion list from settings
      * @return List of exclusion entries
@@ -184,6 +185,7 @@ public:
      * @param exclusionList List of exclusion entries to save
      */
     void saveExclusionList(const QList<ExclusionEntry>& exclusionList);
+#endif
 
 private:
     QSettings* m_settings;
