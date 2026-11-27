@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.2.0] - 2026-11-27
+
+### 🚀 Added
+- **Electron helper (`AutoSlidesExtractorHelper`)**: a separate, extraction-only console build for the Electron app, which downloads, updates and runs it by itself. It has a different name from the desktop executable, so it never replaces or uses an installed desktop app. It shares the desktop CLI's `--compatible` PNG and `timeline.json` extraction code (same decoder, detector, SSIM and file naming), with only Qt Core and no GUI, ML models, ONNX Runtime, post-processing or exports. It accepts only the extraction flags and requires `--compatible`. Built with `-DAUTOSLIDES_ELECTRON_HELPER=ON` from its own vcpkg manifest (`installer/helper/vcpkg.json`: LGPL FFmpeg without x264/Opus, PNG-only OpenCV). The packages are a macOS arm64 `.tar.gz`, a Windows x64 `.zip` and a Linux x86-64 `.tar.gz`, each with its own licence notices (`installer/package-helper-*`). See `installer/helper/README.md`.
+- **Helper release assets**: a release now also carries the three helper archives and `AutoSlidesExtractorHelper-manifest.json`. The manifest lists, per Node `platform-arch`, each archive's versioned URL, size, SHA-256 and executable path, and is always at `releases/latest/download/AutoSlidesExtractorHelper-manifest.json`. A `SHA256SUMS.txt` covers every asset.
+- **Electron contract test** (`tests/electron_contract.py`): a process-level test with a generated fixture whose paths contain spaces and non-ASCII characters. It covers the JSON probes, stdout/stderr routing, file names, decoded pixels and timeline timings across timeline, downsampling and chunk-size settings, bad arguments, missing or invalid input, failed writes, a video with no decodable frames, and SIGTERM/SIGINT after the first slide. CI runs it on every unpacked helper archive. On a release tag it also runs the shipped desktop package against the helper on each platform and requires identical results.
+
+### 🐛 Fixed
+- **Hangs on videos that open but yield no frames**: the frame producer now always tells the slide detector it has finished, also when opening the video fails or nothing decodes. The run ends with "No frames extracted from video" instead of waiting forever.
+- **Hang after a slide-detection error**: if the detector thread fails, decoding is cancelled and the producer is released instead of blocking on the full queue. The first error is the one reported.
+- **CLI signal handling**: SIGINT/SIGTERM (and Windows console events) now only set an atomic flag, which the event loop checks. Before, the handler called into Qt, which is not safe inside a signal handler.
+- **Write errors**: PNG/JPEG and `timeline.json` writes now check the flush, and `TimelineMetadata` reports a short write. In the helper, a failed slide or timeline write fails the run (exit 4) before `done`. The desktop app keeps its best-effort behaviour.
+
+### 🔄 Changed
+- **ONNX Runtime now comes from nuget.org**: Microsoft made the `microsoft/onnxruntime` GitHub repository (and its release downloads) private on 17 November 2026, which broke the desktop builds. The builds now fetch the official `Microsoft.ML.OnnxRuntime` package. It is the same version, 1.23.2, and its macOS and Windows runtime libraries are byte-identical to the former GitHub release files. `installer/fetch-onnxruntime.py` downloads it, rejects it unless its SHA-512 matches the pin in `installer/onnxruntime.json`, and lays it out in `vendor/` as before. CMake reads the version from that file. The macOS build also checks that the library is the Core ML build. Versions after 1.23.x require macOS 14, so the upgrade is left for a separate change.
+- **CI**: a new `Build Electron helper` workflow runs when extraction sources, CMake, the helper packaging or the contract test change. The desktop builds skip changes that only touch the helper. `ci.yml` also checks that the helper manifest version matches the app version, that the four build workflows and the helper notices use the same vcpkg pin, and that the PowerShell packager and the test driver parse.
+- **Release**: the `Release` workflow builds the helper and runs the desktop-vs-helper contract on all three platforms before it creates the draft. The draft has 9 packages plus the manifest and checksums.
+
 ## [2.1.0] - 2026-10-31
 
 ### 🚀 Added

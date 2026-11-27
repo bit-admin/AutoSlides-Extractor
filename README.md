@@ -127,6 +127,7 @@ Available release assets may vary by version. In general:
 - **macOS**: Apple Silicon (arm64) only. Open `AutoSlides.Extractor-<version>-macOS-arm64.dmg` and drag **AutoSlides Extractor** onto the **Applications** link. The app is ad-hoc signed (not notarized), so clear the quarantine flag once after installing (see the Gatekeeper note below). Intel Macs can build from source.
 - **Windows**: use the installer or portable archive when provided. Prebuilt Windows packages use DirectML and CPU ONNX Runtime for hardware-accelerated ML inference without requiring CUDA drivers or external CUDA DLLs.
 - **Linux**: on Debian/Ubuntu, install the `.deb` with `sudo apt install ./AutoSlides.Extractor-<version>-Linux-x86_64.deb` (installs to `/opt/autoslides-extractor` and adds a menu entry and the `AutoSlidesExtractor` command). On other distributions, use the `.AppImage` (`chmod +x` it, then run it) or the portable `.tar.gz` (extract, then run `./AutoSlidesExtractor`). Prebuilt Linux packages target x86_64 CPUs with AVX2 and glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer), and use CPU ONNX Runtime. If the AppImage reports a FUSE error, install `libfuse2` or run it with `--appimage-extract-and-run`. Other systems can build from source.
+- **`AutoSlidesExtractorHelper-*` archives and `AutoSlidesExtractorHelper-manifest.json`**: the extraction-only helper that the Electron app downloads and updates by itself. You don't need them for the desktop app. See the [helper guide](installer/helper/README.md#releases).
 
 ### macOS Gatekeeper Note
 
@@ -883,6 +884,8 @@ This is what makes crop restore and recrop non-destructive.
 
 ## Build From Source
 
+For the separately packaged **AutoSlidesExtractorHelper** (headless compatible PNG/timeline extraction for Electron on macOS arm64, Windows x64, and Linux x86-64), see the [helper build and integration guide](installer/helper/README.md). The default build below produces the full desktop app.
+
 ### Dependencies
 
 Required:
@@ -944,18 +947,26 @@ On Windows, vcpkg can provide OpenCV and FFmpeg. The repository includes `vcpkg.
 
 The CMake build checks for vendor ONNX Runtime folders first, then `find_package(onnxruntime)`, then common include/library paths.
 
-Vendor examples:
+The version used by the release builds is pinned, with its SHA-512, in `installer/onnxruntime.json`. The official `Microsoft.ML.OnnxRuntime` package comes from nuget.org; `microsoft/onnxruntime` GitHub releases have been unavailable since November 2026. To fetch it into `vendor/` as CI does:
 
-```text
-vendor/onnxruntime-osx-arm64-1.23.2/
-vendor/onnxruntime-osx-x86_64-1.23.2/
-vendor/onnxruntime-win-x64-1.23.2/
-vendor/onnxruntime-win-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-1.23.2/
+```bash
+python3 installer/fetch-onnxruntime.py --rid osx-arm64   # or linux-x64, win-x64
 ```
 
-*(Note: Prebuilt Windows releases use `onnxruntime-win-x64` with DirectML/CPU support to eliminate CUDA runtime dependencies. If you need CUDA execution on Windows, download the GPU ONNX package when building from source).*
+It creates `vendor/onnxruntime-<rid>-<version>/` with `include/` and `lib/`. CMake reads the version from the pin file; pass `-DONNXRUNTIME_VERSION=<version>` to use a different vendor folder.
+
+Vendor folders CMake recognizes (`<version>` from the pin):
+
+```text
+vendor/onnxruntime-osx-arm64-<version>/
+vendor/onnxruntime-osx-x86_64-<version>/
+vendor/onnxruntime-win-x64-<version>/
+vendor/onnxruntime-win-x64-gpu-<version>/
+vendor/onnxruntime-linux-x64-gpu-<version>/
+vendor/onnxruntime-linux-x64-<version>/
+```
+
+*(Note: Prebuilt Windows releases use `onnxruntime-win-x64` with DirectML/CPU support to eliminate CUDA runtime dependencies. If you need CUDA execution, place the GPU ONNX Runtime package in the `-gpu-` folder when building from source).*
 
 If ONNX Runtime is missing, the app still builds. ML classification and YOLO Auto Crop are disabled.
 

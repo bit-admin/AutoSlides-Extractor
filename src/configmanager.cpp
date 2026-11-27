@@ -1,5 +1,7 @@
 #include "configmanager.h"
+#ifndef AUTOSLIDES_ELECTRON_HELPER
 #include "postprocessor.h"
+#endif
 #include <QDir>
 #include <QCoreApplication>
 
@@ -211,6 +213,7 @@ SSIMPreset ConfigManager::getPresetFromName(const QString& name)
     }
 }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
 QList<ExclusionEntry> ConfigManager::loadExclusionList()
 {
     QList<ExclusionEntry> list;
@@ -267,3 +270,4 @@ void ConfigManager::saveExclusionList(const QList<ExclusionEntry>& exclusionList
 
     m_settings->sync();
 }
+#endif

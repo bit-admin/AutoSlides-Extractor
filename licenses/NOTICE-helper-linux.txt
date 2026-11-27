@@ -1,0 +1,27 @@
+AutoSlides Extractor Helper — Linux runtime notice
+=================================================
+
+The helper source code is licensed under the MIT License (LICENSE-MIT.txt).
+Qt Core, Copyright The Qt Company Ltd. and other contributors, is dynamically
+linked under the GNU Lesser General Public License version 3 (LGPL-3.0.txt,
+incorporating GPL-3.0.txt). You may replace the bundled shared libraries in
+lib/ with compatible modified versions and reverse engineer the combined work
+to debug such modifications.
+
+Qt sources and third-party attributions:
+  https://download.qt.io/archive/qt/
+  https://doc.qt.io/qt-6/qtcore-attribution.html
+The ICU libraries accompanying the official Qt Linux kit are from ICU 73.2;
+see ICU-73.2.txt and https://github.com/unicode-org/icu/tree/release-73-2 .
+
+FFmpeg is a dynamically linked LGPL build, without the desktop GPL-enabled
+codec bundle. ffmpeg.txt and opencv4.txt are the actual installed ports'
+licences. Other bundled vcpkg libraries are accompanied by <port>.txt files;
+ubuntu-*.txt notices identify any redistributed Ubuntu runtime libraries.
+The system loader, glibc and the standard C++ runtime are not redistributed.
+
+Helper source and build configuration: https://github.com/bit-admin/AutoSlides-Extractor
+FFmpeg source: https://ffmpeg.org/download.html
+OpenCV source: https://github.com/opencv/opencv
+Port versions, patches and build recipes: https://github.com/microsoft/vcpkg/tree/2026.07.29/ports
+Ubuntu library sources: https://launchpad.net/ubuntu/+source

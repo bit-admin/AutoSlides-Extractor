@@ -4,8 +4,12 @@
 #   versions: CMakeLists.txt, vcpkg.json, the Windows .rc, the NSIS script and the
 #             two strings in src/ (main.cpp, mainwindow.cpp) agree on the version. On a tag (when called from release.yml) the
 #             tag must be v<version> and CHANGELOG.md must have a [<version>] entry.
+#             Also: one vcpkg pin across the four build workflows and the helper's
+#             licence notices, and the helper's vcpkg.json carries the app version.
 #   lint:     actionlint on the workflows; syntax check of the packaging scripts
-#             (shellcheck at error level for the bash one).
+#             (shellcheck at error level for the bash ones, PowerShell parser for
+#             the .ps1), the Electron contract test driver and the ONNX Runtime
+#             fetch script / pin.
 
 name: CI
 
@@ -48,6 +52,7 @@ jobs:
 
           found = {
               "vcpkg.json version": json.load(open("vcpkg.json"))["version"],
+              "helper vcpkg.json version": json.load(open("installer/helper/vcpkg.json"))["version"],
               "rc FILEVERSION": grab("resources/AutoSlidesExtractor.rc", r"^FILEVERSION\s+([0-9,]+)"),
               "rc PRODUCTVERSION": grab("resources/AutoSlidesExtractor.rc", r"^PRODUCTVERSION\s+([0-9,]+)"),
               "rc FileVersion": grab("resources/AutoSlidesExtractor.rc", r'"FileVersion",\s*"([^"]+)"'),
@@ -59,6 +64,7 @@ jobs:
           }
           expected = {
               "vcpkg.json version": ver,
+              "helper vcpkg.json version": ver,
               "rc FILEVERSION": commas,
               "rc PRODUCTVERSION": commas,
               "rc FileVersion": ver,
@@ -90,6 +96,25 @@ jobs:
           elif not has_entry:
               print(f"::warning file=CHANGELOG.md::No '## [{ver}]' entry yet (required before tagging v{ver})")
 
+          # One vcpkg pin for every build. The helper's licence notices link the
+          # port recipes at that tag, so they must follow a pin bump.
+          pin = grab(".github/workflows/build-macos.yml", r"^\s*VCPKG_COMMIT:\s*[\"']([^\"']+)[\"']")
+          pins = {f".github/workflows/{w}.yml VCPKG_COMMIT":
+                      grab(f".github/workflows/{w}.yml", r"^\s*VCPKG_COMMIT:\s*[\"']([^\"']+)[\"']")
+                  for w in ("build-linux", "build-windows", "build-helper")}
+          for path in ("licenses/NOTICE-helper.txt", "licenses/NOTICE-helper-linux.txt",
+                       "installer/package-helper-windows.ps1"):
+              text = open(path, encoding="utf-8").read()
+              refs = set(re.findall(r"microsoft/vcpkg/tree/([\w.-]+)/", text))
+              pins[f"{path} vcpkg tag"] = refs.pop() if len(refs) == 1 else f"{sorted(refs)} (want exactly one)"
+          print(f"build-macos.yml vcpkg pin: {pin}")
+          for key, got in pins.items():
+              ok = pin is not None and got == pin
+              bad |= not ok
+              print(f"{'ok ' if ok else 'BAD'} {key}: {got!r}")
+              if not ok:
+                  print(f"::error::{key} is {got!r}, expected {pin!r} (VCPKG_COMMIT in build-macos.yml)")
+
           sys.exit(1 if bad else 0)
 
   lint:
@@ -114,4 +139,16 @@ jobs:
           sudo apt-get install -y --no-install-recommends zsh >/dev/null
           bash -n installer/package-linux.sh
           zsh -n installer/package-macos.sh
-          shellcheck -S error installer/package-linux.sh
+          bash -n installer/package-helper-linux.sh
+          zsh -n installer/package-helper-macos.sh
+          shellcheck -S error installer/package-linux.sh installer/package-helper-linux.sh
+          python3 -m py_compile tests/electron_contract.py installer/fetch-onnxruntime.py
+          python3 installer/fetch-onnxruntime.py --print-env | grep -Eq '^ONNXRUNTIME_VERSION=[0-9]+\.[0-9]+\.[0-9]+$'
+
+      - name: PowerShell packaging script
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/installer/package-helper-windows.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { "::error file=installer/package-helper-windows.ps1::$_" }; exit 1 }

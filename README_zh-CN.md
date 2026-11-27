@@ -127,6 +127,7 @@ AutoSlides Extractor 是一款原生桌面应用，用于把录播课程、在�
 - **macOS**：仅支持 Apple Silicon（arm64）。打开 `AutoSlides.Extractor-<版本>-macOS-arm64.dmg`，将 **AutoSlides Extractor** 拖到 **Applications**（应用程序）链接上。应用为 ad-hoc 签名（未经公证），安装后需清除一次隔离属性（见下方 Gatekeeper 提示）。Intel Mac 可从源码构建。
 - **Windows**：使用安装器或便携压缩包。预构建 Windows 发布包采用 DirectML 和 CPU ONNX Runtime 提供 GPU 硬件加速，无需额外安装或捆绑 CUDA 驱动与 DLL。
 - **Linux**：Debian/Ubuntu 可使用 `sudo apt install ./AutoSlides.Extractor-<版本>-Linux-x86_64.deb` 安装 `.deb`（安装到 `/opt/autoslides-extractor`，并添加菜单项与 `AutoSlidesExtractor` 命令）。其他发行版使用 `.AppImage`（先 `chmod +x` 再运行）或便携 `.tar.gz`（解压后运行 `./AutoSlidesExtractor`）。预构建 Linux 发布包面向支持 AVX2 的 x86_64 CPU 与 glibc 2.35+（Ubuntu 22.04、Debian 12、Fedora 36 或更新版本），使用 CPU ONNX Runtime。如果 AppImage 提示 FUSE 错误，请安装 `libfuse2`，或使用 `--appimage-extract-and-run` 运行。其他系统可从源码构建。
+- **`AutoSlidesExtractorHelper-*` 压缩包与 `AutoSlidesExtractorHelper-manifest.json`**：仅用于提取的精简版，由 Electron 应用自行下载和更新，桌面版用户无需下载。详见[精简版指南](installer/helper/README.md#releases)。
 
 ### macOS Gatekeeper 提示
 
@@ -883,6 +884,8 @@ slides_Lecture01/slide_Lecture01_001.jpg
 
 ## 从源码构建
 
+macOS arm64、Windows x64 和 Linux x86-64 上的 Electron 应用可使用单独打包的 **AutoSlidesExtractorHelper**，以无界面方式提取兼容模式的 PNG 和时间线。构建步骤与调用示例见[精简版构建与集成指南](installer/helper/README.md)。下方默认构建仍生成完整桌面版。
+
 ### 依赖
 
 必需：
@@ -944,18 +947,26 @@ Windows 可用 vcpkg 提供 OpenCV 和 FFmpeg。仓库中的 `vcpkg.json` 覆盖
 
 CMake 会先检查 `vendor/` 下的平台专用 ONNX Runtime 目录，再尝试 `find_package(onnxruntime)` 和常见 include/lib 路径。
 
-示例：
+发布构建所用的版本及其 SHA-512 固定在 `installer/onnxruntime.json` 中。官方 `Microsoft.ML.OnnxRuntime` 包从 nuget.org 获取（自 2026 年 11 月起，`microsoft/onnxruntime` 的 GitHub Releases 无法访问）。与 CI 相同的获取方式：
 
-```text
-vendor/onnxruntime-osx-arm64-1.23.2/
-vendor/onnxruntime-osx-x86_64-1.23.2/
-vendor/onnxruntime-win-x64-1.23.2/
-vendor/onnxruntime-win-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-gpu-1.23.2/
-vendor/onnxruntime-linux-x64-1.23.2/
+```bash
+python3 installer/fetch-onnxruntime.py --rid osx-arm64   # 或 linux-x64、win-x64
 ```
 
-*（注：Windows 预构建发布包使用 `onnxruntime-win-x64`（包含 DirectML 和 CPU 支持）以消除 CUDA 运行时依赖。如果从源码构建且需要 Windows 上的 CUDA 支持，请下载 GPU 版本 ONNX 包）。*
+脚本会生成包含 `include/` 与 `lib/` 的 `vendor/onnxruntime-<rid>-<版本>/`。CMake 从固定文件读取版本；如需使用其他 vendor 目录，可传入 `-DONNXRUNTIME_VERSION=<版本>`。
+
+CMake 可识别的 vendor 目录（`<版本>` 取自固定文件）：
+
+```text
+vendor/onnxruntime-osx-arm64-<版本>/
+vendor/onnxruntime-osx-x86_64-<版本>/
+vendor/onnxruntime-win-x64-<版本>/
+vendor/onnxruntime-win-x64-gpu-<版本>/
+vendor/onnxruntime-linux-x64-gpu-<版本>/
+vendor/onnxruntime-linux-x64-<版本>/
+```
+
+*（注：Windows 预构建发布包使用 `onnxruntime-win-x64`（包含 DirectML 和 CPU 支持）以消除 CUDA 运行时依赖。如果从源码构建且需要 CUDA 支持，请将 GPU 版本 ONNX Runtime 包放入 `-gpu-` 目录）。*
 
 如果找不到 ONNX Runtime，应用仍可构建，但 ML 分类和 YOLO Auto Crop 会禁用。
 

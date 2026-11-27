@@ -21,7 +21,7 @@
 #   PKG_CONFIG_PATH   - Paths to .pc files for pkg-config
 
 cmake_minimum_required(VERSION 3.16)
-project(AutoSlidesExtractor VERSION 2.1.0 LANGUAGES CXX)
+project(AutoSlidesExtractor VERSION 2.2.0 LANGUAGES CXX)
 
 # Enable resource compiler on Windows
 if(WIN32)
@@ -106,6 +106,8 @@ endif()
 
 message(STATUS "Detected CPU architecture: ${CPU_ARCH}")
 
+option(AUTOSLIDES_ELECTRON_HELPER "Build the headless PNG extractor instead of the desktop application" OFF)
+
 # SIMD Detection and Configuration
 set(SIMD_FLAGS "")
 set(SIMD_DEFINITIONS "")
@@ -116,6 +118,10 @@ if(CPU_ARCH STREQUAL "ARM64")
     list(APPEND SIMD_DEFINITIONS "-DNEON_AVAILABLE")
     message(STATUS "Enabled NEON SIMD support")
 
+elseif(AUTOSLIDES_ELECTRON_HELPER AND MSVC)
+    # The distributed x64 helper targets the MSVC baseline, not the CI CPU.
+    # Do not probe GCC -m flags (or enable unconditional AVX instructions).
+    message(STATUS "Using baseline MSVC x64 instructions for the portable helper")
 elseif(CPU_ARCH STREQUAL "x86_64" OR CPU_ARCH STREQUAL "x86")
     # x86/x64 SIMD detection
     check_cxx_compiler_flag("-msse4.2" COMPILER_SUPPORTS_SSE42)
@@ -135,6 +141,45 @@ elseif(CPU_ARCH STREQUAL "x86_64" OR CPU_ARCH STREQUAL "x86")
         list(APPEND SIMD_DEFINITIONS "-DSSE42_AVAILABLE")
         message(STATUS "Enabled SSE4.2 SIMD support")
     endif()
+endif()
+
+# Both profiles compile the same decoder, detector and image/timeline writer.
+set(EXTRACTION_SOURCES
+    src/main.cpp src/clirunner.cpp src/configmanager.cpp src/videoqueue.cpp
+    src/processingthread.cpp src/videoprocessor.cpp src/hardwaredecoder.cpp
+    src/ssimcalculator.cpp src/slidedetector.cpp src/chunkprocessor.cpp
+    src/memoryoptimizer.cpp src/timelinemetadata.cpp
+)
+
+if(AUTOSLIDES_ELECTRON_HELPER)
+    find_package(Qt6 REQUIRED COMPONENTS Core)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+    qt6_standard_project_setup()
+    add_executable(AutoSlidesExtractorHelper ${EXTRACTION_SOURCES})
+    if(WIN32)
+        # Use the pinned vcpkg port's FindFFMPEG module; pkg-config is not a
+        # prerequisite of the MSVC build. Link just the four decoder imports.
+        find_package(FFMPEG REQUIRED)
+        foreach(component IN ITEMS avformat avcodec avutil swscale)
+            if(NOT FFMPEG_lib${component}_LIBRARY)
+                message(FATAL_ERROR "Missing FFmpeg import library: ${component}")
+            endif()
+            target_link_libraries(AutoSlidesExtractorHelper PRIVATE ${FFMPEG_lib${component}_LIBRARY})
+        endforeach()
+        target_include_directories(AutoSlidesExtractorHelper PRIVATE ${FFMPEG_INCLUDE_DIRS})
+        set_target_properties(AutoSlidesExtractorHelper PROPERTIES WIN32_EXECUTABLE FALSE)
+    else()
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(DECODE REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale)
+        target_link_libraries(AutoSlidesExtractorHelper PRIVATE PkgConfig::DECODE)
+    endif()
+    target_compile_definitions(AutoSlidesExtractorHelper PRIVATE
+        AUTOSLIDES_ELECTRON_HELPER AUTOSLIDES_HELPER_VERSION="${PROJECT_VERSION}" ${SIMD_DEFINITIONS})
+    set_target_properties(AutoSlidesExtractorHelper PROPERTIES COMPILE_FLAGS "${SIMD_FLAGS}")
+    target_link_libraries(AutoSlidesExtractorHelper PRIVATE Qt6::Core ${OpenCV_LIBS})
+    target_include_directories(AutoSlidesExtractorHelper PRIVATE ${OpenCV_INCLUDE_DIRS})
+    install(TARGETS AutoSlidesExtractorHelper RUNTIME DESTINATION bin)
+    return() # No desktop dependency discovery, Qt GUI deployment, or embedded models.
 endif()
 
 # Find required packages
@@ -168,34 +213,41 @@ set(ONNX_FOUND FALSE)
 # Step 1: Check vendor directory first (platform-specific with hardware acceleration)
 message(STATUS "Searching for ONNX Runtime with hardware acceleration support...")
 
+# Vendor folders are vendor/onnxruntime-<platform>-<version>, created by
+# installer/fetch-onnxruntime.py (pinned in installer/onnxruntime.json).
+file(READ "${CMAKE_SOURCE_DIR}/installer/onnxruntime.json" ONNX_PIN_JSON)
+string(REGEX MATCH "\"version\"[ \t]*:[ \t]*\"([0-9.]+)\"" _onnx_pin_match "${ONNX_PIN_JSON}")
+set(ONNXRUNTIME_VERSION "${CMAKE_MATCH_1}" CACHE STRING "ONNX Runtime version of the vendor folder to use")
+message(STATUS "Vendor ONNX Runtime version: ${ONNXRUNTIME_VERSION}")
+
 if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-    set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-osx-arm64-1.23.2")
-    set(VENDOR_ONNX_LIB_NAME "libonnxruntime.1.23.2.dylib")
+    set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}")
+    set(VENDOR_ONNX_LIB_NAME "libonnxruntime.${ONNXRUNTIME_VERSION}.dylib")
     set(VENDOR_ONNX_PROVIDER "Core ML")
 elseif(APPLE)
-    set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-osx-x86_64-1.23.2")
-    set(VENDOR_ONNX_LIB_NAME "libonnxruntime.1.23.2.dylib")
+    set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}")
+    set(VENDOR_ONNX_LIB_NAME "libonnxruntime.${ONNXRUNTIME_VERSION}.dylib")
     set(VENDOR_ONNX_PROVIDER "Core ML")
 elseif(WIN32)
     # Prefer GPU version (CUDA) if available
-    if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-1.23.2")
-        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-1.23.2")
+    if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-${ONNXRUNTIME_VERSION}")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-gpu-${ONNXRUNTIME_VERSION}")
         set(VENDOR_ONNX_LIB_NAME "onnxruntime.lib")
         set(VENDOR_ONNX_PROVIDER "CUDA")
-    elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-1.23.2")
-        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-1.23.2")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}")
         set(VENDOR_ONNX_LIB_NAME "onnxruntime.lib")
         set(VENDOR_ONNX_PROVIDER "CPU")
     endif()
 elseif(UNIX)
     # Linux - check for CUDA version
-    if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-gpu-1.23.2")
-        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-gpu-1.23.2")
-        set(VENDOR_ONNX_LIB_NAME "libonnxruntime.so.1.23.2")
+    if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}")
+        set(VENDOR_ONNX_LIB_NAME "libonnxruntime.so.${ONNXRUNTIME_VERSION}")
         set(VENDOR_ONNX_PROVIDER "CUDA")
-    elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-1.23.2")
-        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-1.23.2")
-        set(VENDOR_ONNX_LIB_NAME "libonnxruntime.so.1.23.2")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}")
+        set(VENDOR_ONNX_PATH "${CMAKE_SOURCE_DIR}/vendor/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}")
+        set(VENDOR_ONNX_LIB_NAME "libonnxruntime.so.${ONNXRUNTIME_VERSION}")
         set(VENDOR_ONNX_PROVIDER "CPU")
     endif()
 endif()
@@ -296,12 +348,10 @@ endif()
 if(NOT ONNX_FOUND)
     message(STATUS "ONNX Runtime not found - ML classification will be disabled")
     message(STATUS "To enable ML classification with hardware acceleration:")
-    message(STATUS "  1. Download pre-built binaries from:")
-    message(STATUS "     https://github.com/microsoft/onnxruntime/releases/tag/v1.23.2")
-    message(STATUS "  2. Extract to vendor/ directory:")
-    message(STATUS "     - macOS ARM64: vendor/onnxruntime-osx-arm64-1.23.2/")
-    message(STATUS "     - Windows: vendor/onnxruntime-win-x64-gpu-1.23.2/")
-    message(STATUS "  3. Rebuild with CMake")
+    message(STATUS "  1. Fetch the pinned NuGet package (SHA-512 checked) into vendor/:")
+    message(STATUS "     python3 installer/fetch-onnxruntime.py --rid osx-arm64|win-x64|linux-x64")
+    message(STATUS "     -> vendor/onnxruntime-<rid>-${ONNXRUNTIME_VERSION}/")
+    message(STATUS "  2. Re-run CMake")
     message(STATUS "")
     message(STATUS "Alternative (without hardware acceleration):")
     message(STATUS "  macOS:   brew install onnxruntime")
@@ -424,26 +474,16 @@ qt6_standard_project_setup()
 
 # Source files
 set(SOURCES
-    src/main.cpp
+    ${EXTRACTION_SOURCES}
     src/mainwindow.cpp
     src/settingsdialog.cpp
     src/rangeslider.cpp
     src/styledslider.cpp
-    src/videoprocessor.cpp
-    src/hardwaredecoder.cpp
-    src/ssimcalculator.cpp
-    src/slidedetector.cpp
-    src/configmanager.cpp
-    src/videoqueue.cpp
-    src/processingthread.cpp
-    src/chunkprocessor.cpp
-    src/memoryoptimizer.cpp
     src/processingpipeline.cpp
     src/naturalsorter.cpp
     src/phashcalculator.cpp
     src/trashmanager.cpp
     src/trashmetadata.cpp
-    src/timelinemetadata.cpp
     src/cropmetadata.cpp
     src/cropmanager.cpp
     src/cropimageview.cpp
@@ -461,7 +501,6 @@ set(SOURCES
     src/processingtab.cpp
     src/postprocessingtab.cpp
     src/mlclassificationtab.cpp
-    src/clirunner.cpp
     src/cliinstaller.cpp
 )
 

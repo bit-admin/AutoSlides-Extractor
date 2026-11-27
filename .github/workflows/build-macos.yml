@@ -36,11 +36,13 @@ name: Build macOS Release
 on:
   push:
     branches: [main]
-    # Docs-only changes skip the (long) package build.
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    # Docs-only and Electron-helper-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
   # release.yml calls this on a v* tag and publishes the artifacts to one draft.
@@ -57,7 +59,7 @@ permissions:
 
 env:
   QT_VERSION: "6.8.3"
-  ONNXRUNTIME_VERSION: "1.23.2"
+  # ONNX Runtime version + SHA-512: installer/onnxruntime.json (fetched from nuget.org)
   # Folder name matches the CMakeLists vendor lookup for Apple arm64.
   ONNX_PACKAGE: "onnxruntime-osx-arm64"
   # Same pin as build-windows.yml / build-linux.yml. Bump intentionally.
@@ -188,29 +190,27 @@ jobs:
           path: ${{ github.workspace }}/vcpkg-bincache
           key: vcpkg-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
 
+      - name: Read ONNX Runtime pin
+        shell: bash
+        run: python3 installer/fetch-onnxruntime.py --print-env >> "$GITHUB_ENV"
+
       - name: Restore ONNX Runtime
         id: restore-onnx
         uses: actions/cache/restore@v4
         with:
           path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
-          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-nuget-${{ hashFiles('installer/onnxruntime.json', 'installer/fetch-onnxruntime.py') }}
 
-      - name: Download ONNX Runtime (osx-arm64, Core ML)
+      - name: Download ONNX Runtime (osx-arm64, Core ML; nuget.org, SHA-512 pinned)
         if: steps.restore-onnx.outputs.cache-hit != 'true'
-        run: |
-          name="$ONNX_PACKAGE-$ONNXRUNTIME_VERSION"
-          url="https://github.com/microsoft/onnxruntime/releases/download/v$ONNXRUNTIME_VERSION/$name.tgz"
-          echo "Downloading $url"
-          mkdir -p vendor
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tgz" "$url"
-          tar -xzf "$RUNNER_TEMP/$name.tgz" -C vendor
-          rm -f "$RUNNER_TEMP/$name.tgz"
+        run: python3 installer/fetch-onnxruntime.py --rid osx-arm64
 
       - name: Verify ONNX Runtime present
         run: |
           lib="vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib/libonnxruntime.$ONNXRUNTIME_VERSION.dylib"
           [ -f "$lib" ] || { echo "::error::$lib missing after cache/download"; exit 1; }
           lipo -archs "$lib" | grep -qw arm64 || { echo "::error::$lib has no arm64 slice"; exit 1; }
+          otool -L "$lib" | grep -q '/CoreML.framework/' || { echo "::error::$lib is not the Core ML build"; exit 1; }
           otool -l "$lib" | grep -A3 LC_BUILD_VERSION | grep minos || true
           ls -la "vendor/$ONNX_PACKAGE-$ONNXRUNTIME_VERSION/lib"
 
@@ -219,7 +219,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
-          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-nuget-${{ hashFiles('installer/onnxruntime.json', 'installer/fetch-onnxruntime.py') }}
 
       - name: Configure CMake
         run: |

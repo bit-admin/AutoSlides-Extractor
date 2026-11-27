@@ -29,11 +29,13 @@ name: Build Windows Release
 on:
   push:
     branches: [main]
-    # Docs-only changes skip the (long) package build.
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    # Docs-only and Electron-helper-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
   # release.yml calls this on a v* tag and publishes the artifacts to one draft.
@@ -50,7 +52,7 @@ permissions:
   contents: read
 
 env:
-  ONNXRUNTIME_VERSION: "1.23.2"
+  # ONNX Runtime version + SHA-512: installer/onnxruntime.json (fetched from nuget.org)
   # Portable build: DirectML/CPU ONNX (no CUDA redistributable).
   ONNX_PACKAGE: "onnxruntime-win-x64"
   # Pin vcpkg so binary-cache ABIs stay stable across runs (do not git pull master).
@@ -202,47 +204,22 @@ jobs:
           path: C:/vcpkg
           key: vcpkg-tool-${{ runner.os }}-${{ env.VCPKG_COMMIT }}
 
+      - name: Read ONNX Runtime pin
+        run: python installer/fetch-onnxruntime.py --print-env | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Restore ONNX Runtime
         id: restore-onnx
         uses: actions/cache/restore@v4
         with:
           path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
-          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-win-x64-slim1
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-nuget-${{ hashFiles('installer/onnxruntime.json', 'installer/fetch-onnxruntime.py') }}
 
-      - name: Download ONNX Runtime (portable x64, strip debug)
+      # CPU package (DirectML/CUDA are separate packages); no PDBs, Azure EP dropped.
+      - name: Download ONNX Runtime (portable x64; nuget.org, SHA-512 pinned)
         if: steps.restore-onnx.outputs.cache-hit != 'true'
         run: |
-          $ver = $env:ONNXRUNTIME_VERSION
-          $name = "$($env:ONNX_PACKAGE)-$ver"
-          $url = "https://github.com/microsoft/onnxruntime/releases/download/v$ver/$name.zip"
-          New-Item -ItemType Directory -Force -Path vendor | Out-Null
-          $zip = "$env:RUNNER_TEMP/$name.zip"
-          Write-Host "Downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile $zip -MaximumRetryCount 3 -RetryIntervalSec 5
-          if (Test-Path "vendor/$name") { Remove-Item "vendor/$name" -Recurse -Force }
-          Expand-Archive -Path $zip -DestinationPath vendor/ -Force
-          Remove-Item $zip -Force
-          if (-not (Test-Path "vendor/$name/lib/onnxruntime.dll")) {
-            throw "ONNX Runtime download incomplete: vendor/$name/lib/onnxruntime.dll missing"
-          }
-          if (-not (Test-Path "vendor/$name/lib/onnxruntime.lib")) {
-            throw "ONNX Runtime download incomplete: vendor/$name/lib/onnxruntime.lib missing (needed to link)"
-          }
-          $libDir = "vendor/$name/lib"
-          Get-ChildItem $libDir -File | ForEach-Object {
-            $keep = $_.Extension -in @('.dll', '.lib')
-            if ($_.Name -match 'cuda|tensorrt|trt') { $keep = $false }
-            if (-not $keep) {
-              Write-Host "  drop $($_.Name) ($([math]::Round($_.Length/1MB, 2)) MB)"
-              Remove-Item $_.FullName -Force
-            }
-          }
-          foreach ($noise in @('Privacy.md', 'ThirdPartyNotices.txt', 'GIT_COMMIT_ID')) {
-            $p = "vendor/$name/$noise"
-            if (Test-Path $p) { Remove-Item $p -Force }
-          }
-          $left = (Get-ChildItem "vendor/$name" -Recurse -File | Measure-Object Length -Sum).Sum
-          Write-Host "ONNX vendor slim size: $([math]::Round($left/1MB, 2)) MB"
+          python installer/fetch-onnxruntime.py --rid win-x64
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Verify ONNX Runtime present
         run: |
@@ -266,7 +243,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
-          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-win-x64-slim1
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-nuget-${{ hashFiles('installer/onnxruntime.json', 'installer/fetch-onnxruntime.py') }}
 
       - name: Install vcpkg dependencies
         id: vcpkg-install

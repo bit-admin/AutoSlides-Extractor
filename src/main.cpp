@@ -1,20 +1,27 @@
-#include <QApplication>
 #include <QCoreApplication>
-#include <QStyleFactory>
 #include <QStringList>
+#include "clirunner.h"
+
+#ifndef AUTOSLIDES_ELECTRON_HELPER
+#include <QApplication>
+#include <QStyleFactory>
 #ifdef Q_OS_LINUX
 #include <QFileInfo>
 #include <QIcon>
 #endif
 #include "mainwindow.h"
-#include "clirunner.h"
+#endif
 
 namespace {
 
 void setApplicationProperties()
 {
     QCoreApplication::setApplicationName(QStringLiteral("AutoSlides Extractor"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("2.1.0"));
+#ifdef AUTOSLIDES_ELECTRON_HELPER
+    QCoreApplication::setApplicationVersion(QStringLiteral(AUTOSLIDES_HELPER_VERSION));
+#else
+    QCoreApplication::setApplicationVersion(QStringLiteral("2.2.0"));
+#endif
     QCoreApplication::setOrganizationName(QStringLiteral("AutoSlidesExtractor"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("autoslidesextractor.com"));
 }
@@ -29,6 +36,7 @@ bool isMacProcessSerialArgument(const QString& argument)
 #endif
 }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
 bool hasUserArguments(int argc, char *argv[])
 {
     for (int i = 1; i < argc; ++i) {
@@ -40,6 +48,7 @@ bool hasUserArguments(int argc, char *argv[])
     }
     return false;
 }
+#endif
 
 QStringList cliArguments()
 {
@@ -59,16 +68,23 @@ QStringList cliArguments()
     return args;
 }
 
+int runCli(int argc, char *argv[])
+{
+    QCoreApplication app(argc, argv);
+    setApplicationProperties();
+    CliRunner runner;
+    return runner.run(cliArguments());
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
 {
+#ifdef AUTOSLIDES_ELECTRON_HELPER
+    return runCli(argc, argv);
+#else
     if (hasUserArguments(argc, argv)) {
-        QCoreApplication app(argc, argv);
-        setApplicationProperties();
-
-        CliRunner runner;
-        return runner.run(cliArguments());
+        return runCli(argc, argv);
     }
 
     QApplication app(argc, argv);
@@ -94,4 +110,5 @@ int main(int argc, char *argv[])
     window.show();
 
     return app.exec();
+#endif
 }

@@ -36,11 +36,13 @@ name: Build Linux Release
 on:
   push:
     branches: [main]
-    # Docs-only changes skip the (long) package build.
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    # Docs-only and Electron-helper-only changes skip the (long) package build.
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   pull_request:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE', 'installer/helper/**', 'installer/package-helper-*',
+                   'licenses/*helper*', 'tests/**', '.github/workflows/build-helper.yml']
   # Manual run: build + smoke-test packages, upload as workflow artifacts only.
   workflow_dispatch:
   # release.yml calls this on a v* tag and publishes the artifacts to one draft.
@@ -57,7 +59,7 @@ permissions:
 
 env:
   QT_VERSION: "6.8.3"
-  ONNXRUNTIME_VERSION: "1.23.2"
+  # ONNX Runtime version + SHA-512: installer/onnxruntime.json (fetched from nuget.org)
   # CPU build (no CUDA redistributable). Folder name matches CMakeLists vendor lookup.
   ONNX_PACKAGE: "onnxruntime-linux-x64"
   # Same pin as build-windows.yml (FFmpeg 8.1.2, OpenCV 4.12.0). Bump intentionally.
@@ -188,23 +190,20 @@ jobs:
           path: ${{ github.workspace }}/vcpkg-bincache
           key: vcpkg-bin-${{ runner.os }}-${{ env.VCPKG_COMMIT }}-${{ env.VCPKG_TRIPLET }}-${{ hashFiles('vcpkg.json', format('installer/vcpkg-triplets/{0}.cmake', env.VCPKG_TRIPLET)) }}-g2-${{ github.run_id }}
 
+      - name: Read ONNX Runtime pin
+        shell: bash
+        run: python3 installer/fetch-onnxruntime.py --print-env >> "$GITHUB_ENV"
+
       - name: Restore ONNX Runtime
         id: restore-onnx
         uses: actions/cache/restore@v4
         with:
           path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
-          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-nuget-${{ hashFiles('installer/onnxruntime.json', 'installer/fetch-onnxruntime.py') }}
 
-      - name: Download ONNX Runtime (CPU)
+      - name: Download ONNX Runtime (CPU, nuget.org, SHA-512 pinned)
         if: steps.restore-onnx.outputs.cache-hit != 'true'
-        run: |
-          name="$ONNX_PACKAGE-$ONNXRUNTIME_VERSION"
-          url="https://github.com/microsoft/onnxruntime/releases/download/v$ONNXRUNTIME_VERSION/$name.tgz"
-          echo "Downloading $url"
-          mkdir -p vendor
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$name.tgz" "$url"
-          tar -xzf "$RUNNER_TEMP/$name.tgz" -C vendor
-          rm -f "$RUNNER_TEMP/$name.tgz"
+        run: python3 installer/fetch-onnxruntime.py --rid linux-x64
 
       - name: Verify ONNX Runtime present
         run: |
@@ -220,7 +219,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: vendor/${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}
-          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-v1
+          key: onnx-${{ env.ONNX_PACKAGE }}-${{ env.ONNXRUNTIME_VERSION }}-nuget-${{ hashFiles('installer/onnxruntime.json', 'installer/fetch-onnxruntime.py') }}
 
       - name: Configure CMake
         run: |

@@ -1,8 +1,14 @@
+// Shared by the desktop CLI and the Electron helper (AUTOSLIDES_ELECTRON_HELPER).
+// The helper compiles only extraction: options and stages between the marked
+// "desktop-only" #ifndef blocks are absent there. Put a new extraction option
+// outside those blocks; put a new desktop flag inside them.
 #include "clirunner.h"
 #include "processingthread.h"
 #include "videoqueue.h"
-#include "videoexporter.h"
-#include "pdfexporter.h"
+#ifndef AUTOSLIDES_ELECTRON_HELPER
+#include "processingpipeline.h"
+#endif
+#include <cmath>
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
@@ -13,11 +19,12 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QDateTime>
-#include <QMetaObject>
+#include <QTimer>
 #include <QDebug>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -31,17 +38,18 @@ constexpr int EXIT_OK = 0;
 constexpr int EXIT_BAD_ARGS = 2;
 constexpr int EXIT_BAD_INPUT = 3;
 constexpr int EXIT_PROCESSING_FAILED = 4;
+#ifndef AUTOSLIDES_ELECTRON_HELPER
 constexpr int EXIT_POSTPROCESSING_FAILED = 5;
 constexpr int EXIT_VIDEO_EXPORT_FAILED = 6;
 constexpr int EXIT_PDF_EXPORT_FAILED = 7;
+#endif
 constexpr int EXIT_CANCELLED_SIGINT = 130;
 constexpr int EXIT_CANCELLED_SIGTERM = 143;
 
-// Shared with signal handlers. Set by the OS-level signal handler; consumed
-// on the Qt thread via a posted metacall to CliRunner::requestCancel().
-std::atomic<bool> g_cancelRequested{false};
-std::atomic<int> g_cancelSignal{0}; // SIGTERM or SIGINT
-CliRunner* g_activeRunner = nullptr;
+// A signal may interrupt Qt while it holds internal locks. Never allocate or
+// invoke Qt from the handler. The Qt event loop observes this flag instead.
+static_assert(std::atomic<int>::is_always_lock_free);
+std::atomic<int> g_cancelSignal{0}; // zero, SIGTERM or SIGINT
 
 bool parseBoolFlag(const QString& value, bool* out)
 {
@@ -60,22 +68,7 @@ bool parseBoolFlag(const QString& value, bool* out)
 } // namespace
 
 CliRunner::CliRunner(QObject* parent)
-    : QObject(parent),
-      m_phashRedundant(false),
-      m_phashExclusion(false),
-      m_mlClassify(false),
-      m_exclusionListOverridden(false),
-      m_processingResultCode(EXIT_OK),
-      m_processingSlideCount(0),
-      m_processingFinished(false),
-      m_lastFramePercent(-100.0),
-      m_lastPostCurrent(-1),
-      m_progressBarActive(false),
-      m_jsonMode(false),
-      m_postProcessingFailed(false),
-      m_postStage(QStringLiteral("phash")),
-      m_cancelHandled(false),
-      m_activeThread(nullptr)
+    : QObject(parent)
 {
 }
 
@@ -202,6 +195,7 @@ QJsonObject CliRunner::parseVideoInfoString(const QString& raw) const
     return obj;
 }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
 QString CliRunner::trashCategoryForReason(const QString& reason) const
 {
     if (reason.startsWith(QStringLiteral("Duplicate"), Qt::CaseInsensitive)) {
@@ -228,18 +222,15 @@ QString CliRunner::trashCategoryForReason(const QString& reason) const
     }
     return QStringLiteral("other");
 }
+#endif
 
 namespace {
 
 extern "C" void cli_signal_handler(int sig)
 {
-    if (g_cancelRequested.exchange(true)) {
+    if (g_cancelSignal.exchange(sig) != 0) {
         // Already requested. Second hit: bail out hard.
         std::_Exit(sig == SIGINT ? EXIT_CANCELLED_SIGINT : EXIT_CANCELLED_SIGTERM);
-    }
-    g_cancelSignal.store(sig);
-    if (g_activeRunner) {
-        QMetaObject::invokeMethod(g_activeRunner, "requestCancel", Qt::QueuedConnection);
     }
 }
 
@@ -266,8 +257,6 @@ BOOL WINAPI cli_console_ctrl_handler(DWORD ctrl)
 
 void CliRunner::installSignalHandlers()
 {
-    g_activeRunner = this;
-    g_cancelRequested.store(false);
     g_cancelSignal.store(0);
     std::signal(SIGTERM, cli_signal_handler);
     std::signal(SIGINT, cli_signal_handler);
@@ -283,12 +272,10 @@ void CliRunner::uninstallSignalHandlers()
 #ifdef _WIN32
     SetConsoleCtrlHandler(cli_console_ctrl_handler, FALSE);
 #endif
-    g_activeRunner = nullptr;
 }
 
 void CliRunner::requestCancel()
 {
-    // Posted from cli_signal_handler via QMetaObject::invokeMethod.
     if (m_activeThread) {
         m_activeThread->stopProcessing();
     } else {
@@ -328,6 +315,14 @@ int CliRunner::run(const QStringList& arguments)
     }
 
     installSignalHandlers();
+    QTimer cancelTimer;
+    connect(&cancelTimer, &QTimer::timeout, this, [this, &cancelTimer] {
+        if (g_cancelSignal.load() != 0) {
+            cancelTimer.stop();
+            requestCancel();
+        }
+    });
+    cancelTimer.start(25);
 
     QFileInfo videoInfo(m_videoPath);
     if (!videoInfo.exists() || !videoInfo.isFile()) {
@@ -363,6 +358,7 @@ int CliRunner::run(const QStringList& arguments)
     m_config.compareExcluded = m_phashExclusion;
     m_config.enableMLClassification = m_mlClassify;
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
     if (m_phashExclusion && !m_exclusionListOverridden) {
         // Default: pull the saved GUI exclusion list. CLI-supplied hashes
         // (when --phash-exclusion-hashes was given) are NOT persisted back to GUI config.
@@ -382,6 +378,7 @@ int CliRunner::run(const QStringList& arguments)
         }
     }
 
+#endif
     const double ssim = ConfigManager::getSSIMThreshold(m_config.ssimPreset, m_config.customSSIMThreshold);
     QJsonArray phases;
     if (m_phashRedundant) phases.append(QStringLiteral("phash-redundant"));
@@ -419,6 +416,7 @@ int CliRunner::run(const QStringList& arguments)
         return processingRc;
     }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
     if (m_config.enablePostProcessing) {
         int postRc = runPostProcessingStage(slidesDir);
         if (postRc != EXIT_OK) {
@@ -442,6 +440,7 @@ int CliRunner::run(const QStringList& arguments)
             return videoRc;
         }
     }
+#endif
 
     if (m_jsonMode) {
         QJsonObject obj;
@@ -481,6 +480,11 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         QStringLiteral("Downsample height in pixels."), QStringLiteral("h"));
     QCommandLineOption chunkOpt(QStringLiteral("chunk-size"),
         QStringLiteral("Frame chunk size."), QStringLiteral("n"));
+    QCommandLineOption writeTimelineOpt(QStringLiteral("write-timeline"),
+        QStringLiteral("Opt-in: write timeline.json (media time → slide map) inside the slides "
+                       "folder. Off by default (does not inherit GUI setting). Compatible with "
+                       "--compatible."));
+#ifndef AUTOSLIDES_ELECTRON_HELPER // --- desktop-only options (post-processing, export) ---
     QCommandLineOption jpegOpt(QStringLiteral("jpeg-quality"),
         QStringLiteral("JPEG quality 1..100."), QStringLiteral("n"));
 
@@ -519,11 +523,6 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         QStringLiteral("Opt-in: after successful auto-crops, re-check those slides for pHash "
                        "duplicates. Off by default (does not inherit GUI setting). "
                        "Requires --ml-autocrop-maybe to have effect."));
-    QCommandLineOption writeTimelineOpt(QStringLiteral("write-timeline"),
-        QStringLiteral("Opt-in: write timeline.json (media time → slide map) inside the slides "
-                       "folder. Off by default (does not inherit GUI setting). Compatible with "
-                       "--compatible."));
-
     QCommandLineOption exportPdfOpt(QStringLiteral("export-pdf"),
         QStringLiteral("After extraction (and post-processing), also write <output>/<name>.pdf "
                        "with the remaining slides, as Slides Export does. Not allowed with --compatible."));
@@ -566,16 +565,21 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         QStringLiteral("Sample rate in Hz for --video-audio aac (8000..48000); 0 = source "
                        "rate (max 48000). Default: 0."), QStringLiteral("hz"));
 
+#endif // desktop-only options (also register them in the matching addOption block below)
     QCommandLineOption jsonOpt(QStringLiteral("json"),
         QStringLiteral("Emit NDJSON / JSON Lines events to stdout (and JSON errors to stderr) "
                        "instead of human-readable text. Suppresses the progress bar. "
                        "Designed for child_process.spawn integration (e.g. Electron)."));
 
     QCommandLineOption compatibleOpt(QStringLiteral("compatible"),
+#ifdef AUTOSLIDES_ELECTRON_HELPER
+        QStringLiteral("Required for extraction: use Electron-compatible slide names and PNG output."));
+#else
         QStringLiteral("Compatibility mode for an external (Electron) consumer. Strips the "
                        "'screen_' prefix from the video name in folder/file names, uses 'Slide_' "
                        "file prefix, outputs PNG instead of JPG, and disables all post-processing. "
                        "Not allowed with phash/ml flags. --jpeg-quality is ignored."));
+#endif
 
     parser.addOption(videoOpt);
     parser.addOption(outputOpt);
@@ -584,6 +588,7 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(dsWidthOpt);
     parser.addOption(dsHeightOpt);
     parser.addOption(chunkOpt);
+#ifndef AUTOSLIDES_ELECTRON_HELPER
     parser.addOption(jpegOpt);
     parser.addOption(phashRedundantOpt);
     parser.addOption(phashExclusionOpt);
@@ -600,7 +605,9 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(mlDelMaybeOpt);
     parser.addOption(mlAutoCropMaybeOpt);
     parser.addOption(mlPostCropDedupOpt);
+#endif
     parser.addOption(writeTimelineOpt);
+#ifndef AUTOSLIDES_ELECTRON_HELPER
     parser.addOption(exportPdfOpt);
     parser.addOption(pdfReduceOpt);
     parser.addOption(pdfAspectOpt);
@@ -614,10 +621,15 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     parser.addOption(videoAudioBitrateOpt);
     parser.addOption(videoAudioChannelsOpt);
     parser.addOption(videoAudioRateOpt);
+#endif
     parser.addOption(jsonOpt);
     parser.addOption(compatibleOpt);
 
     if (!parser.parse(arguments)) {
+#ifdef AUTOSLIDES_ELECTRON_HELPER
+        // Even malformed requests from a spawning process get an NDJSON error.
+        m_jsonMode = arguments.contains(QStringLiteral("--json"));
+#endif
         *errorOut = parser.errorText();
         return false;
     }
@@ -659,6 +671,16 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
     m_outputDir = parser.value(outputOpt);
 
     m_config.compatibleMode = parser.isSet(compatibleOpt);
+#ifdef AUTOSLIDES_ELECTRON_HELPER
+    if (!m_config.compatibleMode) {
+        *errorOut = QStringLiteral("--compatible is required");
+        return false;
+    }
+    if (!parser.positionalArguments().isEmpty()) {
+        *errorOut = QStringLiteral("unexpected positional argument: ") + parser.positionalArguments().first();
+        return false;
+    }
+#else
     if (m_config.compatibleMode) {
         static constexpr const char* kForbidden[] = {
             "phash-redundant", "phash-exclusion", "phash-exclusion-hashes",
@@ -678,6 +700,7 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         // --jpeg-quality is intentionally ignored (output is PNG, quality is irrelevant).
     }
 
+#endif
     bool ok = true;
     if (parser.isSet(ssimOpt)) {
         double v = parser.value(ssimOpt).toDouble(&ok);
@@ -708,6 +731,11 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         if (!ok || v <= 0) { *errorOut = QStringLiteral("--chunk-size must be a positive integer"); return false; }
         m_config.chunkSize = v;
     }
+    m_config.writeTimeline = parser.isSet(writeTimelineOpt);
+#ifdef AUTOSLIDES_ELECTRON_HELPER // --- helper: no post-processing state to parse ---
+    m_config.mlAutoCropMaybeSlides = false;
+    m_config.mlPostCropDedup = false;
+#else // --- desktop-only option parsing (jpeg, phash, ML, export) ---
     if (parser.isSet(jpegOpt)) {
         int v = parser.value(jpegOpt).toInt(&ok);
         if (!ok || v < 1 || v > 100) { *errorOut = QStringLiteral("--jpeg-quality must be 1..100"); return false; }
@@ -784,7 +812,6 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         // Silent no-op: post-crop dedup only applies to slides auto-cropped this run.
         qInfo() << "CliRunner: --ml-postcrop-dedup ignored without --ml-autocrop-maybe";
     }
-    m_config.writeTimeline = parser.isSet(writeTimelineOpt);
 
     // --- export: settings start from the Slides Export defaults ------------
     auto intOption = [&](const QCommandLineOption& opt, int lo, int hi, int* out) {
@@ -894,9 +921,11 @@ bool CliRunner::parseArgs(const QStringList& arguments, QString* errorOut)
         return false;
     }
 
+#endif // desktop-only option parsing
     return true;
 }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER
 bool CliRunner::parseExclusionHashes(const QString& csv, QString* errorOut)
 {
     m_exclusionList.clear();
@@ -916,6 +945,8 @@ bool CliRunner::parseExclusionHashes(const QString& csv, QString* errorOut)
     }
     return true;
 }
+
+#endif
 
 int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
 {
@@ -966,8 +997,7 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
     finishProgressBar();
     m_activeThread = nullptr;
 
-    if (g_cancelRequested.load()) {
-        const int sig = g_cancelSignal.load();
+    if (const int sig = g_cancelSignal.load()) {
         const int rc = (sig == SIGINT) ? EXIT_CANCELLED_SIGINT : EXIT_CANCELLED_SIGTERM;
         if (m_jsonMode && !m_cancelHandled) {
             QJsonObject obj;
@@ -1010,6 +1040,7 @@ int CliRunner::runProcessingStage(QString* outSlidesDir, int* outSlideCount)
     return EXIT_OK;
 }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER // --- desktop-only stages: video/PDF export, post-processing ---
 int CliRunner::runVideoExportStage(const QString& slidesDir)
 {
     VideoExportOptions options = m_videoOptions;
@@ -1177,6 +1208,8 @@ int CliRunner::runPostProcessingStage(const QString& slidesDir)
     return EXIT_OK;
 }
 
+#endif // desktop-only stages
+
 void CliRunner::onVideoProcessingCompleted(int /*videoIndex*/, int slidesExtracted)
 {
     m_processingSlideCount = slidesExtracted;
@@ -1226,6 +1259,7 @@ void CliRunner::onFrameExtractionProgress(int videoIndex, double percentage)
     }
 }
 
+#ifndef AUTOSLIDES_ELECTRON_HELPER // --- desktop-only post-processing slots ---
 void CliRunner::onPostProgressUpdated(int current, int total)
 {
     if (current == m_lastPostCurrent) return;
@@ -1280,3 +1314,4 @@ void CliRunner::onMLClassificationFailed(const QString& errorMessage)
         writeStderr(QStringLiteral("[ml] failed: ") + errorMessage);
     }
 }
+#endif // desktop-only post-processing slots

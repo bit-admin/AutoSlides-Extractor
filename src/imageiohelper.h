@@ -49,9 +49,7 @@ public:
         }
 
         qint64 written = file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
-        file.close();
-
-        return written == static_cast<qint64>(buffer.size());
+        return written == static_cast<qint64>(buffer.size()) && file.flush();
     }
 
     /**
