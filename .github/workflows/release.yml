@@ -84,9 +84,19 @@ jobs:
           name: AutoSlidesExtractorHelper-${{ matrix.platform }}
           path: helper
 
-      - name: Install fixture tool (Linux)
+      # The desktop bundle leaves host libraries (libOpenGL, libEGL, X11, fontconfig, ...)
+      # to the system, so a fresh runner can't load it. Installing the .deb makes apt
+      # pull exactly its Depends; the test still runs the portable tarball.
+      - uses: actions/download-artifact@v4
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+        with:
+          name: AutoSlides.Extractor-${{ steps.version.outputs.version }}-Linux-x86_64-deb
+          path: desktop-deb
+      - name: Install fixture tool and desktop host libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg "$PWD"/desktop-deb/*.deb
       - name: Install fixture tool (macOS)
         if: runner.os == 'macOS'
         run: command -v ffmpeg >/dev/null || brew install ffmpeg
